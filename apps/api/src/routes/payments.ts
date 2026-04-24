@@ -5,6 +5,9 @@ import {
   type CreatePaymentIntentResponse,
   type GetOrderResponse,
   OrderStatusSchema,
+  RefundOrderRequestSchema,
+  type RefundOrderResponse,
+  RefundOrderResponseSchema,
 } from "@stripe-prototype/shared";
 import type { Db } from "../db";
 
@@ -204,6 +207,108 @@ export function paymentsRoutes(deps: { stripe: Stripe; db: Db }): Hono {
         status: "new",
       };
       return c.json(res);
+    } catch (err) {
+      if (err instanceof Stripe.errors.StripeError) {
+        const status =
+          err instanceof Stripe.errors.StripeConnectionError ? 503 : 502;
+        return c.json(
+          {
+            ok: false,
+            error: {
+              type: err.type,
+              code: err.code ?? null,
+              requestId: err.requestId ?? null,
+            },
+          },
+          status,
+        );
+      }
+      return c.json({ ok: false, error: { type: "unknown" } }, 500);
+    }
+  });
+
+  // Full refund only (prototype scope). Client: POST { orderId }.
+  // Flow: gate on DB order.status == "succeeded" -> stripe.refunds.create
+  // with an orderId-derived idempotency key -> respond with the refund
+  // shape. DB transition to "refunded" happens via the `charge.refunded`
+  // webhook (wired in Stage 3), NOT here — that preserves webhook-
+  // authoritative state machine invariants.
+  app.post("/refund", async (c) => {
+    const body = await c.req.json().catch(() => null);
+    const parsed = RefundOrderRequestSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json(
+        {
+          ok: false,
+          error: {
+            type: "validation",
+            issues: parsed.error.issues.map((i) => ({
+              path: i.path.join("."),
+              message: i.message,
+            })),
+          },
+        },
+        400,
+      );
+    }
+    const { orderId } = parsed.data;
+
+    const order = deps.db.getOrder(orderId);
+    if (!order) {
+      return c.json({ ok: false, error: { type: "not_found" } }, 404);
+    }
+    // Only succeeded orders are refundable. `processing` means the charge
+    // hasn't settled yet (Stripe's own refunds endpoint would 400); other
+    // terminal states (failed/canceled) have nothing to refund; `refunded`
+    // would double-refund if we didn't gate.
+    if (order.status !== "succeeded") {
+      return c.json(
+        {
+          ok: false,
+          error: {
+            type: "not_refundable",
+            message: `order status must be "succeeded" to refund (current: ${order.status})`,
+          },
+        },
+        409,
+      );
+    }
+
+    try {
+      const refund = await deps.stripe.refunds.create(
+        {
+          payment_intent: order.payment_intent_id,
+          metadata: { order_id: orderId },
+        },
+        { idempotencyKey: `order:${orderId}:refund` },
+      );
+      // Stripe SDK types Refund.status as `string | null`; docs promise one
+      // of pending/requires_action/succeeded/failed/canceled. Validate via
+      // the shared schema so the response contract is enforced at the
+      // server boundary and any novel status value trips a 500 instead of
+      // leaking to the client.
+      const parsed = RefundOrderResponseSchema.safeParse({
+        refundId: refund.id,
+        paymentIntentId: order.payment_intent_id,
+        orderId,
+        amount: refund.amount,
+        currency: refund.currency,
+        status: refund.status ?? "pending",
+      } satisfies Record<keyof RefundOrderResponse, unknown>);
+      if (!parsed.success) {
+        console.error(
+          `[refund] unexpected stripe refund shape for ${refund.id}`,
+          {
+            status: refund.status,
+            issues: parsed.error.issues,
+          },
+        );
+        return c.json(
+          { ok: false, error: { type: "refund_shape_unexpected" } },
+          500,
+        );
+      }
+      return c.json(parsed.data);
     } catch (err) {
       if (err instanceof Stripe.errors.StripeError) {
         const status =

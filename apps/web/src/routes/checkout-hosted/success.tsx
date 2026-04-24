@@ -1,7 +1,9 @@
+import { useEffect, useState } from "react";
 import { createFileRoute, useSearch } from "@tanstack/react-router";
 import { z } from "zod";
 import { TERMINAL_ORDER_STATUSES } from "@stripe-prototype/shared";
 import { useOrderPoll } from "../../lib/useOrderPoll";
+import { RefundPanel } from "../../components/RefundPanel";
 
 // Stripe hosted Checkout typically appends `session_id` / `payment_intent` on
 // success_url. We only need `order_id` for the poll, but we accept the
@@ -21,8 +23,21 @@ export const Route = createFileRoute("/checkout-hosted/success")({
 function HostedSuccessPage() {
   const search = useSearch({ from: "/checkout-hosted/success" });
   const orderId = search.order_id;
-  const { order, isLoading, error, isNonTerminal, timedOut } =
-    useOrderPoll(orderId);
+  // See ../checkout/success.tsx for the succeeded→refunded pattern: refundedAt
+  // re-anchors the poll window, sawRefunded flips awaitingTransition off once
+  // the webhook lands so polling stops naturally on terminal.
+  const [refundedAt, setRefundedAt] = useState<number | null>(null);
+  const [sawRefunded, setSawRefunded] = useState(false);
+  const { order, isLoading, error, isNonTerminal, timedOut } = useOrderPoll(
+    orderId,
+    {
+      restartKey: refundedAt ?? 0,
+      awaitingTransition: refundedAt != null && !sawRefunded,
+    },
+  );
+  useEffect(() => {
+    if (order?.status === "refunded") setSawRefunded(true);
+  }, [order?.status]);
 
   return (
     <div>
@@ -71,6 +86,9 @@ function HostedSuccessPage() {
           )}
         </dd>
       </dl>
+      {orderId && order && order.status === "succeeded" && (
+        <RefundPanel orderId={orderId} onRefundInitiated={setRefundedAt} />
+      )}
     </div>
   );
 }

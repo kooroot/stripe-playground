@@ -1,7 +1,9 @@
+import { useEffect, useState } from "react";
 import { createFileRoute, useSearch } from "@tanstack/react-router";
 import { z } from "zod";
 import { TERMINAL_ORDER_STATUSES } from "@stripe-prototype/shared";
 import { useOrderPoll } from "../../lib/useOrderPoll";
+import { RefundPanel } from "../../components/RefundPanel";
 
 // Stripe appends its own redirect keys (payment_intent,
 // payment_intent_client_secret, redirect_status); we also ride along
@@ -27,8 +29,22 @@ export const Route = createFileRoute("/checkout/success")({
 function SuccessPage() {
   const search = useSearch({ from: "/checkout/success" });
   const orderId = search.order_id;
-  const { order, isLoading, error, isNonTerminal, timedOut } =
-    useOrderPoll(orderId);
+  // refundedAt bumps useOrderPoll's restartKey (fresh 2-min budget) after a
+  // refund POST succeeds; sawRefunded tracks whether the succeeded→refunded
+  // transition has been observed, so the hook's `awaitingTransition` flag
+  // flips off once the webhook lands and the poll naturally stops.
+  const [refundedAt, setRefundedAt] = useState<number | null>(null);
+  const [sawRefunded, setSawRefunded] = useState(false);
+  const { order, isLoading, error, isNonTerminal, timedOut } = useOrderPoll(
+    orderId,
+    {
+      restartKey: refundedAt ?? 0,
+      awaitingTransition: refundedAt != null && !sawRefunded,
+    },
+  );
+  useEffect(() => {
+    if (order?.status === "refunded") setSawRefunded(true);
+  }, [order?.status]);
 
   return (
     <div>
@@ -84,6 +100,9 @@ function SuccessPage() {
           )}
         </dd>
       </dl>
+      {orderId && order && order.status === "succeeded" && (
+        <RefundPanel orderId={orderId} onRefundInitiated={setRefundedAt} />
+      )}
     </div>
   );
 }

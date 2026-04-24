@@ -1,4 +1,4 @@
-import { useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   TERMINAL_ORDER_STATUSES,
@@ -20,12 +20,16 @@ import { getOrder } from "./api";
 //   lazy-init useState if SSR lands.
 //
 // - Component remount resets the 2-minute budget. A user who navigates away
-//   and comes back triggers a fresh poll window.
+//   and comes back triggers a fresh poll window. Consumers that need a
+//   mid-lifetime reset (e.g. post-refund terminal→terminal transition) can
+//   bump `opts.restartKey` to re-anchor startedAt and clear timedOutRef.
 //
 // - `timedOutRef` is a one-shot tripwire: once set to true, it stays true
-//   for the lifetime of the hook instance. Currently no consumer exposes a
-//   "retry" button; if one is added, it must clear the ref inside its
-//   invalidation path to avoid permanent timeout-true state.
+//   until either the hook remounts or `opts.restartKey` changes.
+//
+// - `opts.awaitingTransition` bypasses the terminal-stop check so a consumer
+//   that just initiated a terminal→terminal transition (succeeded→refunded)
+//   can keep polling. The time budget still applies as a safety net.
 export const MAX_POLL_MS = 120_000;
 export const POLL_INTERVAL_MS = 2000;
 
@@ -37,9 +41,28 @@ export type OrderPollState = {
   timedOut: boolean;
 };
 
-export function useOrderPoll(orderId: string | undefined): OrderPollState {
-  const startedAt = useMemo(() => Date.now(), []);
+export type UseOrderPollOptions = {
+  // Bump to re-anchor the 2-minute budget and clear timedOutRef without
+  // unmounting the component. Used by the refund flow after a successful
+  // POST so the wait for `charge.refunded` gets a fresh window.
+  restartKey?: number;
+  // Keep polling past a terminal status. Enable when a consumer has
+  // initiated an action that will cause a terminal→terminal transition
+  // (e.g. succeeded→refunded) and needs to observe the next terminal state.
+  awaitingTransition?: boolean;
+};
+
+export function useOrderPoll(
+  orderId: string | undefined,
+  opts: UseOrderPollOptions = {},
+): OrderPollState {
+  const { restartKey = 0, awaitingTransition = false } = opts;
+
+  const startedAt = useMemo(() => Date.now(), [restartKey]);
   const timedOutRef = useRef(false);
+  useEffect(() => {
+    timedOutRef.current = false;
+  }, [restartKey]);
 
   const query = useQuery({
     queryKey: ["order", orderId],
@@ -51,7 +74,9 @@ export function useOrderPoll(orderId: string | undefined): OrderPollState {
     refetchInterval: (q) => {
       const data = q.state.data;
       if (!data) return POLL_INTERVAL_MS;
-      if (TERMINAL_ORDER_STATUSES.has(data.status)) return false;
+      if (TERMINAL_ORDER_STATUSES.has(data.status) && !awaitingTransition) {
+        return false;
+      }
       if (Date.now() - startedAt >= MAX_POLL_MS) {
         timedOutRef.current = true;
         return false;
@@ -62,12 +87,18 @@ export function useOrderPoll(orderId: string | undefined): OrderPollState {
 
   const isNonTerminal =
     !!query.data && !TERMINAL_ORDER_STATUSES.has(query.data.status);
+  // When awaiting a transition (post-refund), the UI still cares about
+  // "did we time out before the new terminal landed?" — so timedOut stays
+  // true as long as the consumer is awaiting, even if current status reads
+  // terminal (the pre-transition terminal).
+  const timedOut =
+    timedOutRef.current && (isNonTerminal || awaitingTransition);
 
   return {
     order: query.data,
     isLoading: query.isLoading,
     error: query.error,
     isNonTerminal,
-    timedOut: timedOutRef.current && isNonTerminal,
+    timedOut,
   };
 }
