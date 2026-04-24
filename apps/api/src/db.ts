@@ -29,10 +29,14 @@ export type OrderRow = {
 export type Db = {
   file: string;
   getOrder(orderId: string): OrderRow | null;
+  getOrderByIntent(paymentIntentId: string): OrderRow | null;
   insertOrder(
     row: Omit<OrderRow, "created_at" | "updated_at">,
   ): void;
   updateOrderStatus(orderId: string, status: string): void;
+  // Webhook idempotency: returns true iff this event.id was newly recorded.
+  // A false return means Stripe is re-delivering — skip the handler body.
+  markEventProcessed(eventId: string, eventType: string): boolean;
   close(): void;
 };
 
@@ -54,9 +58,34 @@ export async function openDb(envPath: string): Promise<Db> {
       )`,
     )
     .run();
+  // payment_intent_id lookup used by webhook handlers (charge.refunded carries
+  // the intent id, not the order id). UNIQUE is correct because each order
+  // has exactly one PaymentIntent by design (orderId-keyed create-or-reuse).
+  conn
+    .prepare(
+      `CREATE UNIQUE INDEX IF NOT EXISTS orders_payment_intent_id_idx
+         ON orders(payment_intent_id)`,
+    )
+    .run();
+  // Webhook idempotency table. Stripe guarantees at-least-once delivery, so
+  // the same event.id can arrive multiple times (network retries, CLI replay,
+  // manual `stripe events resend`). Primary key on id gives us a single
+  // atomic check: INSERT OR IGNORE + .changes tells us "first time?".
+  conn
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS processed_events (
+        id TEXT PRIMARY KEY,
+        type TEXT NOT NULL,
+        received_at INTEGER NOT NULL
+      )`,
+    )
+    .run();
 
   const getStmt = conn.query<OrderRow, { order_id: string }>(
     "SELECT * FROM orders WHERE order_id = $order_id",
+  );
+  const getByIntentStmt = conn.query<OrderRow, { payment_intent_id: string }>(
+    "SELECT * FROM orders WHERE payment_intent_id = $payment_intent_id",
   );
   // INSERT OR IGNORE: on concurrent inserts for the same order_id, the
   // losing caller's row is silently dropped. They must re-read the DB to
@@ -89,17 +118,40 @@ export async function openDb(envPath: string): Promise<Db> {
        SET status = $status, updated_at = $ts
      WHERE order_id = $order_id`,
   );
+  // INSERT OR IGNORE: duplicate event.id yields 0 row changes, which is the
+  // signal for "Stripe re-delivered, skip". Wrapped in a dedicated method so
+  // route code never sees the raw .changes count.
+  const insertEventStmt = conn.prepare<
+    unknown,
+    [{ id: string; type: string; ts: number }]
+  >(
+    `INSERT OR IGNORE INTO processed_events (id, type, received_at)
+     VALUES ($id, $type, $ts)`,
+  );
 
   return {
     file,
     getOrder(orderId: string) {
       return getStmt.get({ order_id: orderId }) ?? null;
     },
+    getOrderByIntent(paymentIntentId: string) {
+      return (
+        getByIntentStmt.get({ payment_intent_id: paymentIntentId }) ?? null
+      );
+    },
     insertOrder(row) {
       insertStmt.run({ ...row, ts: Date.now() });
     },
     updateOrderStatus(orderId: string, status: string) {
       updateStatusStmt.run({ order_id: orderId, status, ts: Date.now() });
+    },
+    markEventProcessed(eventId: string, eventType: string) {
+      const result = insertEventStmt.run({
+        id: eventId,
+        type: eventType,
+        ts: Date.now(),
+      });
+      return result.changes > 0;
     },
     close() {
       conn.close();
