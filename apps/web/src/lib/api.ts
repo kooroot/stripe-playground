@@ -7,6 +7,9 @@ import {
   CreateCheckoutSessionResponseSchema,
   type GetOrderResponse,
   GetOrderResponseSchema,
+  type RefundOrderRequest,
+  type RefundOrderResponse,
+  RefundOrderResponseSchema,
 } from "@stripe-prototype/shared";
 
 const BASE = import.meta.env.VITE_API_BASE_URL ?? "";
@@ -60,4 +63,21 @@ export async function getOrder(
     );
   }
   return GetOrderResponseSchema.parse(json);
+}
+
+export async function refundOrder(
+  body: RefundOrderRequest,
+): Promise<RefundOrderResponse> {
+  const res = await fetch(`${BASE}/api/payments/refund`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const json = (await res.json()) as unknown;
+  if (!res.ok) {
+    throw new Error(
+      `api ${res.status}: ${JSON.stringify((json as { error?: unknown }).error ?? json)}`,
+    );
+  }
+  return RefundOrderResponseSchema.parse(json);
 }

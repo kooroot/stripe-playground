@@ -138,3 +138,30 @@ export const CreateCheckoutSessionResponseSchema = z.object({
 export type CreateCheckoutSessionResponse = z.infer<
   typeof CreateCheckoutSessionResponseSchema
 >;
+
+// ---------- Stage 5: refund contract ----------
+
+// Prototype-scoped refund: full-amount only, no partial refund UI. The server
+// uses `stripe.refunds.create({payment_intent})` with an idempotency key
+// keyed on orderId so a double-click produces one refund. Terminal order
+// transition (succeeded → refunded) is wired via the `charge.refunded`
+// webhook handler — this request only initiates the refund; the UI polls
+// GET /api/payments/order/:orderId to observe the transition.
+export const RefundOrderRequestSchema = z.object({
+  orderId: OrderIdSchema,
+});
+export type RefundOrderRequest = z.infer<typeof RefundOrderRequestSchema>;
+
+// `status` mirrors Stripe's Refund.status at create-time. For card refunds in
+// test mode this is usually `succeeded` synchronously; for async PMs it can
+// be `pending` (stablecoin/SEPA can take hours to days). Either way the
+// order row flips to `refunded` only once `charge.refunded` fires.
+export const RefundOrderResponseSchema = z.object({
+  refundId: z.string(),
+  paymentIntentId: z.string(),
+  orderId: z.string(),
+  amount: z.number().int(),
+  currency: z.string(),
+  status: z.enum(["pending", "requires_action", "succeeded", "failed", "canceled"]),
+});
+export type RefundOrderResponse = z.infer<typeof RefundOrderResponseSchema>;
