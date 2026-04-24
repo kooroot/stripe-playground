@@ -7,7 +7,7 @@ Last updated: 2026-04-24
 
 ## Problem
 
-The main app wants to accept stablecoin (USDC) payments. Stripe's Stablecoin Accept (under the broader "Pay with Crypto" umbrella) is live but US-business-only at the time of writing — our KR-based entity can't enable it on a `sk_live_...` key. Test mode works for the prototype (this repo demonstrates the flow end-to-end) but production rollout needs a jurisdiction strategy.
+The main app wants to accept stablecoin (USDC) payments. Stripe's Stablecoin Accept (under the broader "Pay with Crypto" umbrella) is live but currently available to a limited set of US businesses — our KR-based entity can't enable it on a `sk_live_...` key. Test mode works for the prototype (this repo demonstrates the flow end-to-end) but production rollout needs a jurisdiction strategy.
 
 ## Options considered
 
@@ -16,7 +16,7 @@ The comparison below is the state-as-of 2026-04-24. Re-check before committing t
 | Option | Time to ship | Monthly fixed cost | Variable fee | Compliance burden | Reversibility |
 |---|---|---|---|---|---|
 | **Stripe Stablecoin Accept via US subsidiary** | 6–10 months | $3–8k (legal + registered agent + US accounting) | 1.5% (announced Stripe rate) | High: US entity formation, state money-transmitter analysis, bank account, EIN, 1099s for team, separate tax filings | Low — can wind down US subsidiary but it's painful |
-| **Circle Payments Network direct integration** | 4–6 weeks | ~$0 (pay-per-transaction) | Circle's spread + on-chain gas | Medium: OFAC screening on every payout, Travel Rule compliance kicks in above thresholds | Medium — swap integration |
+| **Circle CPN Managed Payments (fiat-operating merchant flow)** | 4–6 weeks | ~$0 (pay-per-transaction) | Circle's spread + on-chain gas | Medium: OFAC screening on every payout, Travel Rule compliance kicks in above thresholds | Medium — swap integration |
 | **Coinbase Commerce direct integration** | 2–3 weeks | $0 | 1% flat | Low: Coinbase handles KYC/Travel Rule; we're a merchant | High — redirect checkout, swap is trivial |
 | **Defer, revisit Q3 2026** | 0 | $0 | n/a | None | n/a |
 | **Reverse-integrate: accept on-chain via EVM wallet (Alloy/viem)** | 8–12 weeks | $0 fixed, variable gas | gas + our own FX | High: custody, key mgmt, PCI-equivalent wallet ops, KR FIU reporting on virtual-asset flows | Low — written off as cost |
@@ -29,9 +29,9 @@ The comparison below is the state-as-of 2026-04-24. Re-check before committing t
 
 **Against.** Entity formation is ~$500–2k one-time (Stripe Atlas or equivalent). Ongoing: ~$2–5k/mo for US registered agent, bookkeeping, CPA, plus state-by-state money-transmitter-law analysis (not every state is friendly to payment-facilitator-adjacent structures even if we're just a merchant). A KR parent-US subsidiary arrangement also triggers KR FIU reporting obligations if funds move between them. Break-even vs Coinbase Commerce's 1% flat requires roughly $30–50k/mo in stablecoin volume — if the main app doesn't project that in year one, this option loses on pure economics before factoring risk.
 
-### Option 2 — Circle Payments Network (direct)
+### Option 2 — Circle CPN Managed Payments (fiat-operating merchant flow)
 
-**For.** First-party USDC issuer; spread is tight; settles into a Circle Account we can wire to a KR bank. No redirect — we control the PM UI entirely. Circle Payments (as distinct from older Circle Accounts API) is actively productized for merchants in 2026.
+**For.** First-party USDC issuer; spread is tight; settles into a Circle Account we can wire to a KR bank. No redirect — we control the PM UI entirely. Circle Payments Network's "Managed Payments" product is the productized merchant surface (as distinct from the older Circle Accounts API or the network's wholesale settlement layer between FIs); verify the KR-entity onboarding path is open before committing.
 
 **Against.** We become the PCI-equivalent entity for crypto — key management, failed-settlement handling, chargeback-equivalent dispute flows (which don't exist on-chain; customer support is on us). OFAC screening on every payout is required. Engineering surface is much larger than this prototype: we're essentially rebuilding a chunk of what Stripe gives us.
 
@@ -43,7 +43,7 @@ The comparison below is the state-as-of 2026-04-24. Re-check before committing t
 
 ### Option 4 — Defer
 
-**For.** Stripe's US-only constraint IS time-limited. The team publicly said they're expanding jurisdictions "throughout 2026 and into 2027" (Sessions 2025 talk). If the main app can ship and succeed on card-only for 6–12 months, we may get Stripe Stablecoin Accept in KR without any of the above work.
+**For.** Stripe's US-limited-rollout is time-limited. The team publicly said they're expanding jurisdictions "throughout 2026 and into 2027" (Sessions 2025 talk). If the main app can ship and succeed on card-only for 6–12 months, we may get Stripe Stablecoin Accept in KR without any of the above work.
 
 **Against.** We're betting on Stripe's timeline, which is outside our control. If a competing merchant captures the "stablecoin accepted here" positioning, we're behind. Also — the whole reason we're looking at stablecoin is that some customer cohort (crypto-native users) prefers it; those users buy from whoever supports it NOW.
 

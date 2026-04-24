@@ -29,17 +29,17 @@ export const Route = createFileRoute("/checkout/success")({
 function SuccessPage() {
   const search = useSearch({ from: "/checkout/success" });
   const orderId = search.order_id;
-  // refundedAt bumps useOrderPoll's restartKey (fresh 2-min budget) after a
+  // refundKey bumps useOrderPoll's restartKey (fresh 2-min budget) after a
   // refund POST succeeds; sawRefunded tracks whether the succeeded→refunded
   // transition has been observed, so the hook's `awaitingTransition` flag
   // flips off once the webhook lands and the poll naturally stops.
-  const [refundedAt, setRefundedAt] = useState<number | null>(null);
+  const [refundKey, setRefundKey] = useState(0);
   const [sawRefunded, setSawRefunded] = useState(false);
   const { order, isLoading, error, isNonTerminal, timedOut } = useOrderPoll(
     orderId,
     {
-      restartKey: refundedAt ?? 0,
-      awaitingTransition: refundedAt != null && !sawRefunded,
+      restartKey: refundKey,
+      awaitingTransition: refundKey > 0 && !sawRefunded,
     },
   );
   useEffect(() => {
@@ -101,7 +101,10 @@ function SuccessPage() {
         </dd>
       </dl>
       {orderId && order && order.status === "succeeded" && (
-        <RefundPanel orderId={orderId} onRefundInitiated={setRefundedAt} />
+        <RefundPanel
+          orderId={orderId}
+          onRefundInitiated={() => setRefundKey((k) => k + 1)}
+        />
       )}
     </div>
   );

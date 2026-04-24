@@ -23,16 +23,16 @@ export const Route = createFileRoute("/checkout-hosted/success")({
 function HostedSuccessPage() {
   const search = useSearch({ from: "/checkout-hosted/success" });
   const orderId = search.order_id;
-  // See ../checkout/success.tsx for the succeeded→refunded pattern: refundedAt
+  // See ../checkout/success.tsx for the succeeded→refunded pattern: refundKey
   // re-anchors the poll window, sawRefunded flips awaitingTransition off once
   // the webhook lands so polling stops naturally on terminal.
-  const [refundedAt, setRefundedAt] = useState<number | null>(null);
+  const [refundKey, setRefundKey] = useState(0);
   const [sawRefunded, setSawRefunded] = useState(false);
   const { order, isLoading, error, isNonTerminal, timedOut } = useOrderPoll(
     orderId,
     {
-      restartKey: refundedAt ?? 0,
-      awaitingTransition: refundedAt != null && !sawRefunded,
+      restartKey: refundKey,
+      awaitingTransition: refundKey > 0 && !sawRefunded,
     },
   );
   useEffect(() => {
@@ -87,7 +87,10 @@ function HostedSuccessPage() {
         </dd>
       </dl>
       {orderId && order && order.status === "succeeded" && (
-        <RefundPanel orderId={orderId} onRefundInitiated={setRefundedAt} />
+        <RefundPanel
+          orderId={orderId}
+          onRefundInitiated={() => setRefundKey((k) => k + 1)}
+        />
       )}
     </div>
   );

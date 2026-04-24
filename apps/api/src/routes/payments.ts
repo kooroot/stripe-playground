@@ -274,20 +274,65 @@ export function paymentsRoutes(deps: { stripe: Stripe; db: Db }): Hono {
       );
     }
 
+    // Pre-check for an existing refund on this PaymentIntent. This is
+    // application-level idempotence independent of Stripe's 24h
+    // idempotency-key cache — covers the stale-local-state path where the
+    // initial `charge.refunded` webhook was missed, the order row stayed at
+    // `succeeded`, the 24h window elapsed, and a retry would otherwise
+    // create a duplicate refund. Stripe's API dedupes within 24h via our
+    // Idempotency-Key; this dedupes beyond it.
+    const existing = await deps.stripe.refunds.list({
+      payment_intent: order.payment_intent_id,
+      limit: 1,
+    });
+    const reused = existing.data[0];
+
     try {
-      const refund = await deps.stripe.refunds.create(
-        {
-          payment_intent: order.payment_intent_id,
-          metadata: { order_id: orderId },
-        },
-        { idempotencyKey: `order:${orderId}:refund` },
-      );
+      // Full-refund idempotency key. If this route ever grows partial
+      // refunds, the key MUST include the amount or a client-supplied
+      // attempt id (`order:<uuid>:refund:<amount>` or `:<client-uuid>`) —
+      // otherwise two $5 refunds on a $20 order collide and Stripe either
+      // returns `idempotency_key_in_use` or re-returns the first refund
+      // object, faking "success" for a refund that was never created.
+      const refund =
+        reused ??
+        (await deps.stripe.refunds
+          .create(
+            {
+              payment_intent: order.payment_intent_id,
+              // `requested_by_customer` is the closest fit for a user-
+              // initiated refund button; surfaces in the Stripe dashboard.
+              reason: "requested_by_customer",
+              metadata: { order_id: orderId },
+            },
+            { idempotencyKey: `order:${orderId}:refund` },
+          )
+          .catch(async (err) => {
+            // Concurrent-double-submit race — in practice the button is
+            // disabled-on-pending so this fires only via hand-crafted
+            // curl requests or identical-orderId retries under the 24h
+            // idempotency window. Re-read from refunds.list and return
+            // the winning refund instead of the error.
+            if (
+              err instanceof Stripe.errors.StripeIdempotencyError ||
+              (err instanceof Stripe.errors.StripeError &&
+                err.code === "idempotency_key_in_use")
+            ) {
+              await new Promise((r) => setTimeout(r, 150));
+              const reread = await deps.stripe.refunds.list({
+                payment_intent: order.payment_intent_id,
+                limit: 1,
+              });
+              if (reread.data[0]) return reread.data[0];
+            }
+            throw err;
+          }));
       // Stripe SDK types Refund.status as `string | null`; docs promise one
       // of pending/requires_action/succeeded/failed/canceled. Validate via
       // the shared schema so the response contract is enforced at the
       // server boundary and any novel status value trips a 500 instead of
       // leaking to the client.
-      const parsed = RefundOrderResponseSchema.safeParse({
+      const parsedRefund = RefundOrderResponseSchema.safeParse({
         refundId: refund.id,
         paymentIntentId: order.payment_intent_id,
         orderId,
@@ -295,20 +340,31 @@ export function paymentsRoutes(deps: { stripe: Stripe; db: Db }): Hono {
         currency: refund.currency,
         status: refund.status ?? "pending",
       } satisfies Record<keyof RefundOrderResponse, unknown>);
-      if (!parsed.success) {
+      if (!parsedRefund.success) {
+        // The refund already exists at Stripe (we have refund.id) — this
+        // log line is the reconciliation anchor. Webhook `charge.refunded`
+        // will still fire and flip the order row; the 500 here signals that
+        // the client display has drifted from ground truth.
         console.error(
-          `[refund] unexpected stripe refund shape for ${refund.id}`,
+          `[refund] unexpected stripe refund shape`,
           {
+            refundId: refund.id,
             status: refund.status,
-            issues: parsed.error.issues,
+            issues: parsedRefund.error.issues,
           },
         );
         return c.json(
-          { ok: false, error: { type: "refund_shape_unexpected" } },
+          {
+            ok: false,
+            error: {
+              type: "refund_shape_unexpected",
+              refundId: refund.id,
+            },
+          },
           500,
         );
       }
-      return c.json(parsed.data);
+      return c.json(parsedRefund.data);
     } catch (err) {
       if (err instanceof Stripe.errors.StripeError) {
         const status =

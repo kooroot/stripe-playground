@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useMemo, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   TERMINAL_ORDER_STATUSES,
@@ -42,9 +42,11 @@ export type OrderPollState = {
 };
 
 export type UseOrderPollOptions = {
-  // Bump to re-anchor the 2-minute budget and clear timedOutRef without
-  // unmounting the component. Used by the refund flow after a successful
-  // POST so the wait for `charge.refunded` gets a fresh window.
+  // Bump (monotonic counter) to re-anchor the 2-minute budget and clear
+  // timedOutRef without unmounting the component. Used by the refund flow
+  // after a successful POST so the wait for `charge.refunded` gets a fresh
+  // window. Counter > Date.now() so the "no reset yet" sentinel is 0 and
+  // the restart semantics match the prop name (a bump, not a timestamp).
   restartKey?: number;
   // Keep polling past a terminal status. Enable when a consumer has
   // initiated an action that will cause a terminal→terminal transition
@@ -58,10 +60,16 @@ export function useOrderPoll(
 ): OrderPollState {
   const { restartKey = 0, awaitingTransition = false } = opts;
 
-  const startedAt = useMemo(() => Date.now(), [restartKey]);
+  // Synchronously reset both startedAt and timedOutRef on restartKey change.
+  // Prior shape used a separate useEffect for the ref — which runs AFTER
+  // render, leaving one render where startedAt is fresh but timedOutRef
+  // still reads the stale `true`. That window flashed the "timed out"
+  // banner if the user clicked refund right as the 2-min budget tripped.
+  // Colocating the reset inside useMemo eliminates the window.
   const timedOutRef = useRef(false);
-  useEffect(() => {
+  const startedAt = useMemo(() => {
     timedOutRef.current = false;
+    return Date.now();
   }, [restartKey]);
 
   const query = useQuery({

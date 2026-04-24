@@ -4,20 +4,20 @@ import { refundOrder } from "../lib/api";
 // Shown on the success pages only when the order has landed in `succeeded`.
 // Clicking `refund` POSTs /api/payments/refund; the DB transition to
 // `refunded` is driven by the `charge.refunded` webhook (Stage 3 wiring), so
-// the caller is expected to keep polling afterward. `onRefundInitiated` is
-// fired with Date.now() so the caller can re-anchor its poll window via
-// useOrderPoll's `restartKey` and set `awaitingTransition` until it sees
-// `refunded`.
+// the caller is expected to keep polling afterward. `onRefundInitiated`
+// fires after the POST resolves so the caller can bump useOrderPoll's
+// `restartKey` (re-anchor the 2-min budget) and flip `awaitingTransition`
+// until it observes `refunded`.
 export function RefundPanel({
   orderId,
   onRefundInitiated,
 }: {
   orderId: string;
-  onRefundInitiated: (at: number) => void;
+  onRefundInitiated: () => void;
 }) {
   const mutation = useMutation({
     mutationFn: () => refundOrder({ orderId }),
-    onSuccess: () => onRefundInitiated(Date.now()),
+    onSuccess: () => onRefundInitiated(),
   });
 
   return (

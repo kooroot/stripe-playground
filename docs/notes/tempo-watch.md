@@ -2,24 +2,26 @@
 
 Stage: 5 (monitoring-only doc; no code changes)
 Status: watch quarterly
-Last updated: 2026-04-24
+Last updated: 2026-04-24 (revised per Stage 5 audit — codex Q8 corrected the mainnet-status claim)
 
 ## What Tempo is
 
-Tempo is Stripe + Paradigm's stablecoin-native L1 blockchain, announced late 2025. Design goals per the Stripe Sessions 2025 announcement and subsequent writeups:
+Tempo is Stripe + Paradigm's stablecoin-native L1 blockchain. Design goals per the Stripe Sessions 2025 announcement, Paradigm's writeups, and the current public material at tempo.xyz:
 
 - EVM-compatible (Solidity, standard wallet tooling)
 - Fee payment in stablecoins (USDC, etc.) instead of a native gas token
 - Payments-specific throughput + finality targets (sub-second, "payment-grade")
-- Operator/validator set biased toward regulated financial institutions rather than permissionless anon-validators
+- Validator-set design not yet publicly detailed in full; Paradigm's institutional lineage and Tempo's payments-specific positioning suggest a permissioned or semi-permissioned launch model, but treat that as inference rather than confirmed spec — verify at each quarterly check.
 
 The pitch is: stablecoin payments on L1 today are hostage to the underlying chain's fee token (ETH, SOL, etc.) — users pay USDC-denominated prices but need to hold gas tokens. Tempo removes that friction and targets the merchant payments use case specifically.
+
+**Mainnet status.** Tempo mainnet is live as of 2026-04-24 per the public tempo.xyz material. What is *not* yet widely available is a first-class Stripe-merchant-facing surface that exposes Tempo as a settlement or routing choice — Stripe Stablecoin Accept continues to operate on the existing L1/L2 rails that underlie USDC/USDP/USDG. The gap between "chain is live" and "merchant can opt into it via Stripe" is what this watch is tracking.
 
 ## Why it's explicitly OUT OF SCOPE for this prototype
 
 Per the project charter and re-confirmed during scope setting: this prototype is about **Stripe's hosted abstraction** for stablecoin (their `payment_method_types: ["stablecoin"]` / Stablecoin Accept surface). The underlying chain is an implementation detail that Stripe will choose — may be Tempo, may be existing L1/L2, may be both via routing.
 
-Direct on-chain integration (running an EVM wallet, signing transactions with viem/alloy, managing gas, reading chain events) is a **different problem** with different operational surface (custody, key management, reorg handling, bridge risk). That's out of scope both for this prototype and for the main app's near-term roadmap.
+Direct on-chain integration (running an EVM wallet, signing transactions with viem/alloy, managing gas, reading chain events) is a **different problem** with different operational surface (custody, key management, reorg handling, bridge risk). That's out of scope both for this prototype and for the main app's near-term roadmap — regardless of whether the target chain is Tempo, Ethereum, Solana, or anything else.
 
 ## Why it's still worth watching
 
@@ -32,31 +34,31 @@ Two scenarios where Tempo becomes relevant:
 
 Set a quarterly calendar reminder. Each check: skim these sources, update this file's "Observed status" section below, and flag anything that would reopen the jurisdiction decision memo.
 
-- **Tempo docs / public status** — their developer site. Look for: mainnet launch date announcement, merchant-payment integrations list, any Stripe-specific tooling.
-- **Stripe docs change log** — search for "Tempo". As of 2026-04-24, there is no documented merchant-facing Tempo surface.
+- **tempo.xyz** — the Tempo project's public site. Look for: ecosystem merchant integrations, Stripe-specific tooling, validator-set disclosures, throughput/finality benchmarks.
+- **Stripe docs change log** — search for "Tempo". As of 2026-04-24, there is no documented merchant-facing Tempo opt-in in the Stripe Stablecoin Accept surface.
 - **Stripe Sessions recordings** — annual conference each spring. Tempo-specific sessions, jurisdiction expansions, merchant onboarding changes.
-- **Paradigm research posts** — Tempo's technical lineage is Paradigm-incubated; their research blog is the leading edge of what the chain will actually ship.
+- **Paradigm research posts** — Tempo's technical lineage is Paradigm-incubated; their research blog is the leading edge of what the chain will ship next.
 
 ## Triggers to escalate out of "watch" into "act"
 
-- Tempo mainnet launches and Stripe announces a merchant-facing integration path (beyond testnet demos).
-- Stripe Stablecoin Accept exposes a `chain` parameter or similar routing option in the `payment_method_options` — means merchants now have a choice to make per-transaction.
+- Stripe exposes a `chain` or similar routing parameter on Stablecoin Accept (Checkout or PaymentIntent) — means merchants now have a choice to make per-transaction.
+- Stripe announces a merchant-facing Tempo integration path (dashboard toggle, settlement chain option, etc.).
 - Regulatory change: KR FIU issues guidance on virtual-asset settlement rails that makes L1 choice a compliance decision rather than a technical one.
 - Competitor analysis: another payment processor (PayPal, Adyen, local KR PG) ships Tempo settlement and uses it as a marketing hook.
 
 ## What to NOT do
 
-- **Don't pre-integrate with Tempo directly.** Wallet SDKs, chain clients, custom webhook parsing for on-chain events — all of that is the scope explicitly excluded from this prototype. If we need on-chain integration, that's a separate project with a separate scope doc, separate risk model, and separate legal sign-off.
+- **Don't pre-integrate with Tempo directly.** Wallet SDKs, chain clients, custom webhook parsing for on-chain events — all of that is the scope explicitly excluded from this prototype. If we need on-chain integration, that's a separate project with a separate scope doc, separate risk model, and separate legal sign-off. This stays true whether Tempo mainnet is live or not — "chain is live" doesn't change the operational burden of custody + key management.
 - **Don't track Tempo token economics.** There's public speculation about a native fee token despite the stablecoin-gas pitch. Irrelevant to merchant integration; leave it to the protocol side.
-- **Don't let Tempo dates slip the jurisdiction decision.** The jurisdiction memo's "defer until Q3 2026" is based on Stripe Stablecoin Accept expanding to KR, NOT on Tempo launching. If Stripe opens KR before Tempo matters, we ship.
+- **Don't let Tempo dates slip the jurisdiction decision.** The jurisdiction memo's "defer until Q3 2026" is based on Stripe Stablecoin Accept expanding to KR, NOT on Tempo milestones. If Stripe opens KR before Tempo matters, we ship.
 
 ## Observed status
 
-Fill in during each quarterly check.
+Fill in during each quarterly check. Revisions to this table should note the source consulted, since Tempo's public material changes shape frequently.
 
-| Check date | Tempo status | Stripe KR stablecoin | Triggers fired? | Next check |
-|---|---|---|---|---|
-| 2026-04-24 | not launched (mainnet TBA, testnet only — per public roadmap) | US-only | none | 2026-07 |
+| Check date | Tempo mainnet | Stripe-facing Tempo surface | Stripe KR stablecoin | Triggers fired? | Source consulted | Next check |
+|---|---|---|---|---|---|---|
+| 2026-04-24 | live (per tempo.xyz) | none documented in Stripe Stablecoin Accept | available to a limited set of US businesses | none | tempo.xyz, docs.stripe.com/crypto/pay-with-crypto | 2026-07 |
 
 ## Cross-references
 
