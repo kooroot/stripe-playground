@@ -19,3 +19,5 @@ apps/api/.data/
 
 .vite/
 .bun/
+
+apps/web/src/routeTree.gen.ts
