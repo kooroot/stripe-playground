@@ -7,8 +7,8 @@
     "packages/*"
   ],
   "scripts": {
-    "typecheck": "tsc --noEmit",
-    "dev": "echo 'Stage 1+: concurrently -k -n web,api,stripe \"bun --filter web dev\" \"bun --filter api dev\" \"stripe listen --forward-to localhost:8787/api/webhooks/stripe\"'"
+    "typecheck": "bun --filter '*' typecheck",
+    "dev": "echo 'Stage 1+: wired up then'; exit 1"
   },
   "devDependencies": {
     "typescript": "^5.5.4"

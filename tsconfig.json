@@ -1,11 +1,7 @@
 {
-  "extends": "./tsconfig.base.json",
+  "files": [],
+  "include": [],
   "compilerOptions": {
     "noEmit": true
-  },
-  "include": [
-    "apps/*/src/**/*",
-    "packages/*/src/**/*",
-    "scripts/**/*"
-  ]
+  }
 }
