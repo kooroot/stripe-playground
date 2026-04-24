@@ -12,18 +12,30 @@ import { createPaymentIntent } from "../../lib/api";
 
 export const Route = createFileRoute("/checkout/")({ component: CheckoutPage });
 
+type IntentView =
+  | { phase: "idle" }
+  | { phase: "new" | "reused"; clientSecret: string; paymentIntentId: string }
+  | { phase: "processing"; paymentIntentId: string };
+
 function CheckoutPage() {
   const orderId = useMemo(() => crypto.randomUUID(), []);
   const [amount, setAmount] = useState(1999);
-  const [clientSecret, setClientSecret] = useState<string | null>(null);
-  const [reused, setReused] = useState(false);
+  const [view, setView] = useState<IntentView>({ phase: "idle" });
 
   const intent = useMutation({
     mutationFn: () =>
       createPaymentIntent({ orderId, amount, currency: "usd" }),
     onSuccess(data) {
-      setClientSecret(data.clientSecret);
-      setReused(data.status === "reused");
+      if (data.status === "processing") {
+        setView({ phase: "processing", paymentIntentId: data.paymentIntentId });
+      } else {
+        if (!data.clientSecret) return;
+        setView({
+          phase: data.status,
+          clientSecret: data.clientSecret,
+          paymentIntentId: data.paymentIntentId,
+        });
+      }
     },
   });
 
@@ -34,7 +46,7 @@ function CheckoutPage() {
         orderId <code>{orderId}</code>
       </p>
 
-      {!clientSecret && (
+      {view.phase === "idle" && (
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -65,18 +77,38 @@ function CheckoutPage() {
         </form>
       )}
 
-      {clientSecret && (
+      {(view.phase === "new" || view.phase === "reused") && (
         <>
           <p style={{ fontSize: 12, color: "#666" }}>
-            status: {reused ? "reused intent" : "new intent"}
+            status: {view.phase === "reused" ? "reused intent" : "new intent"}
+            {"  "}
+            <code>{view.paymentIntentId}</code>
           </p>
           <Elements
             stripe={stripePromise}
-            options={{ clientSecret, appearance: { theme: "stripe" } }}
+            options={{
+              clientSecret: view.clientSecret,
+              appearance: { theme: "stripe" },
+            }}
           >
             <PaymentForm />
           </Elements>
         </>
+      )}
+
+      {view.phase === "processing" && (
+        <div>
+          <p>
+            PaymentIntent <code>{view.paymentIntentId}</code> is still
+            processing on Stripe's side. Wait for the
+            <code> payment_intent.succeeded</code> webhook (Stage 3) before
+            treating the order as paid.
+          </p>
+          <p style={{ fontSize: 12, color: "#666" }}>
+            Re-confirming with the same clientSecret would error — Stripe
+            doesn't accept a second confirm on a processing intent.
+          </p>
+        </div>
       )}
     </div>
   );
@@ -87,7 +119,10 @@ function PaymentForm() {
   const elements = useElements();
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  // Guard against double submit when StrictMode double-invokes handlers.
+  // Guards against double submit when the user hits Enter twice before
+  // React commits the `setSubmitting(true)` tick that disables the button.
+  // (StrictMode doesn't double-invoke event handlers, so this isn't about
+  // StrictMode — it's about real double-Enter races.)
   const inflight = useRef(false);
 
   async function onSubmit(e: React.FormEvent) {

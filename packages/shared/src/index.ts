@@ -37,20 +37,28 @@ const OrderIdSchema = z
     { message: "orderId must be a UUID" },
   );
 
+// amount is always expressed in the smallest unit of `currency` (cents for USD,
+// satang for THB, whole yen for JPY — zero-decimal — etc.). 50 is Stripe's
+// minimum charge for USD; other currencies have their own floors but 50 is a
+// safe conservative API-side guard above the zero/$0.01 case.
 export const CreatePaymentIntentRequestSchema = z.object({
   orderId: OrderIdSchema,
-  amount: z.number().int().positive(),
+  amount: z.number().int().min(50),
   currency: IsoCurrencySchema,
 });
 export type CreatePaymentIntentRequest = z.infer<
   typeof CreatePaymentIntentRequestSchema
 >;
 
+// Response shape is a discriminated union on `status`:
+// - "new" | "reused" — a usable clientSecret is returned for PaymentElement
+// - "processing" — no clientSecret (the prior intent is mid-settlement, the
+//   client should render a "still processing" page instead of PaymentElement)
 export const CreatePaymentIntentResponseSchema = z.object({
-  clientSecret: z.string(),
+  clientSecret: z.string().nullable(),
   paymentIntentId: z.string(),
   orderId: z.string(),
-  status: z.enum(["new", "reused"]),
+  status: z.enum(["new", "reused", "processing"]),
 });
 export type CreatePaymentIntentResponse = z.infer<
   typeof CreatePaymentIntentResponseSchema

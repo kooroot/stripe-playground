@@ -6,15 +6,43 @@ import {
 } from "@stripe-prototype/shared";
 import type { Db } from "../db";
 
-// PaymentIntent statuses that are still "mutable" — we can return their
-// client_secret to the browser for another attempt. Terminal statuses
-// force a new PaymentIntent (same orderId is already collected/canceled).
+// Statuses where the stored PaymentIntent can be handed back to the browser
+// for another confirm attempt. NOTE: `processing` is deliberately NOT here —
+// Stripe rejects a second confirm on a processing intent, and a client-side
+// retry with the same clientSecret errors. That status returns a dedicated
+// "processing" response with clientSecret=null so the UI can render a wait
+// page instead of re-instantiating PaymentElement.
+//
+// `requires_capture` is also excluded: today the create call uses
+// automatic_payment_methods (i.e. automatic capture), so this status is
+// unreachable. If a future stage opts into capture_method: "manual", add
+// `requires_capture` here.
 const REUSABLE_STATUSES = new Set<Stripe.PaymentIntent.Status>([
   "requires_payment_method",
   "requires_confirmation",
   "requires_action",
-  "processing",
 ]);
+
+function shapeReuseResponse(
+  orderId: string,
+  pi: Stripe.PaymentIntent,
+): CreatePaymentIntentResponse {
+  if (pi.status === "processing") {
+    return {
+      clientSecret: null,
+      paymentIntentId: pi.id,
+      orderId,
+      status: "processing",
+    };
+  }
+  // Caller must have gated on REUSABLE_STATUSES before calling this branch.
+  return {
+    clientSecret: pi.client_secret as string,
+    paymentIntentId: pi.id,
+    orderId,
+    status: "reused",
+  };
+}
 
 export function paymentsRoutes(deps: { stripe: Stripe; db: Db }): Hono {
   const app = new Hono();
@@ -43,7 +71,6 @@ export function paymentsRoutes(deps: { stripe: Stripe; db: Db }): Hono {
       const existing = deps.db.getOrder(orderId);
 
       if (existing) {
-        // Amount/currency must match — switching them mid-flow is a bug.
         if (existing.amount !== amount || existing.currency !== currency) {
           return c.json(
             {
@@ -61,21 +88,13 @@ export function paymentsRoutes(deps: { stripe: Stripe; db: Db }): Hono {
         const retrieved = await deps.stripe.paymentIntents.retrieve(
           existing.payment_intent_id,
         );
+        if (retrieved.status === "processing") {
+          deps.db.updateOrderStatus(orderId, retrieved.status);
+          return c.json(shapeReuseResponse(orderId, retrieved));
+        }
         if (REUSABLE_STATUSES.has(retrieved.status) && retrieved.client_secret) {
-          deps.db.upsertOrder({
-            order_id: orderId,
-            payment_intent_id: retrieved.id,
-            amount,
-            currency,
-            status: retrieved.status,
-          });
-          const res: CreatePaymentIntentResponse = {
-            clientSecret: retrieved.client_secret,
-            paymentIntentId: retrieved.id,
-            orderId,
-            status: "reused",
-          };
-          return c.json(res);
+          deps.db.updateOrderStatus(orderId, retrieved.status);
+          return c.json(shapeReuseResponse(orderId, retrieved));
         }
         return c.json(
           {
@@ -89,28 +108,54 @@ export function paymentsRoutes(deps: { stripe: Stripe; db: Db }): Hono {
         );
       }
 
-      // New order — create a PaymentIntent with dynamic payment methods
-      // (the design-doc baseline). Idempotency-Key ties retries of the
-      // same orderId to the same Stripe-side intent.
-      const intent = await deps.stripe.paymentIntents.create(
-        {
-          amount,
-          currency,
-          automatic_payment_methods: { enabled: true },
-          metadata: { order_id: orderId },
-        },
-        { idempotencyKey: `order:${orderId}:create` },
-      );
+      // New order path. Two browser tabs can both read "no existing order"
+      // and race into create with the same idempotency key. Stripe
+      // deduplicates the intent object itself, but returns
+      // `idempotency_key_in_use` for the losing concurrent request. Catch
+      // that and re-read the DB (the winning request will have committed
+      // its row by the time we retry).
+      let intent: Stripe.PaymentIntent;
+      try {
+        intent = await deps.stripe.paymentIntents.create(
+          {
+            amount,
+            currency,
+            automatic_payment_methods: { enabled: true },
+            metadata: { order_id: orderId },
+          },
+          { idempotencyKey: `order:${orderId}:create` },
+        );
+      } catch (err) {
+        if (
+          err instanceof Stripe.errors.StripeIdempotencyError ||
+          (err instanceof Stripe.errors.StripeError &&
+            err.code === "idempotency_key_in_use")
+        ) {
+          await new Promise((r) => setTimeout(r, 150));
+          const winner = deps.db.getOrder(orderId);
+          if (!winner) {
+            return c.json(
+              { ok: false, error: { type: "race_unresolved" } },
+              503,
+            );
+          }
+          const reread = await deps.stripe.paymentIntents.retrieve(
+            winner.payment_intent_id,
+          );
+          deps.db.updateOrderStatus(orderId, reread.status);
+          return c.json(shapeReuseResponse(orderId, reread));
+        }
+        throw err;
+      }
 
       if (!intent.client_secret) {
-        // Shouldn't happen unless Stripe shape changes; fail loudly.
         return c.json(
           { ok: false, error: { type: "stripe_unexpected" } },
           500,
         );
       }
 
-      deps.db.upsertOrder({
+      deps.db.insertOrder({
         order_id: orderId,
         payment_intent_id: intent.id,
         amount,

@@ -1,11 +1,18 @@
 import { createFileRoute, useSearch } from "@tanstack/react-router";
 import { z } from "zod";
 
-const SearchSchema = z.object({
-  payment_intent: z.string().optional(),
-  payment_intent_client_secret: z.string().optional(),
-  redirect_status: z.string().optional(),
-});
+// Stripe appends these three keys to the redirect URL after confirmPayment.
+// Any future PM type may add more — e.g. source_redirect_slug, setup_intent.
+// Use passthrough so unknown keys are preserved, not stripped or rejected.
+const SearchSchema = z
+  .object({
+    payment_intent: z.string().optional(),
+    payment_intent_client_secret: z.string().optional(),
+    redirect_status: z
+      .enum(["succeeded", "processing", "requires_action", "failed"])
+      .optional(),
+  })
+  .passthrough();
 
 export const Route = createFileRoute("/checkout/success")({
   component: SuccessPage,
