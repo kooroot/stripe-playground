@@ -1,12 +1,25 @@
 import Stripe from "stripe";
 import { Hono } from "hono";
+import { relative } from "node:path";
 import { loadEnv } from "./env";
 import { makeStripe, STRIPE_API_VERSION } from "./stripe";
+import { openDb } from "./db";
+import { paymentsRoutes } from "./routes/payments";
 
 const env = loadEnv();
 const stripe = makeStripe(env.STRIPE_SECRET_KEY);
+const db = await openDb(env.DATABASE_URL);
+
+// Sanitized startup config — never the secret itself. DB path is logged
+// relative to CWD so we don't leak /Users/<name>/... into transcripts.
+// Closes stage-1/#9 ("Log sanitized startup config + document env precedence").
+console.log(
+  `[api] stage=2 mode=test port=${env.API_PORT} db=${relative(process.cwd(), db.file)} api_version=${STRIPE_API_VERSION}`,
+);
 
 const app = new Hono();
+
+app.route("/api/payments", paymentsRoutes({ stripe, db }));
 
 app.get("/", (c) =>
   c.json({ ok: true, stage: 1, api_version: STRIPE_API_VERSION }),

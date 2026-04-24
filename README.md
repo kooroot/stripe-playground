@@ -6,7 +6,7 @@ Full design and stage plan: [docs/plans/2026-04-24-stripe-prototype-track-a-desi
 
 ## Status
 
-Stage 1 — Stripe CLI + seed script. Bun workspace, Hono API skeleton with `/health` probing `stripe.balance.retrieve()`, and `scripts/seed.ts` creating Customer/Product/Prices in test mode.
+Stage 2 — PaymentIntent + Elements. `POST /api/payments/intent` is an order-keyed create-or-reuse endpoint backed by `bun:sqlite` (`apps/api/.data/`). The web app at `/checkout` uses TanStack Query to create the intent and renders a Stripe `PaymentElement` with dynamic payment methods (cards + crypto + whatever the dashboard allows).
 
 ## Stack
 
@@ -21,32 +21,48 @@ Stage 1 — Stripe CLI + seed script. Bun workspace, Hono API skeleton with `/he
 
 ```bash
 bun install
-cp .env.example .env   # fill in STRIPE_SECRET_KEY + VITE_STRIPE_PUBLISHABLE_KEY (test mode)
+cp .env.example .env   # fill STRIPE_SECRET_KEY + VITE_STRIPE_PUBLISHABLE_KEY (test mode)
+stripe login           # one-time, opens a browser
 
-# one-time Stripe CLI login (opens a browser)
-stripe login
-
-# seed practice objects (Customer + Product + Prices)
-bun run seed
-bun run seed -- --cleanup   # same + delete at the end
-
-# start the api (Hono on Bun)
+# start web (Vite, 5173) + api (Hono, 8787) in one pane
 bun run dev
-curl http://localhost:8787/health   # should return {ok:true, mode:"test"}
+
+# open http://127.0.0.1:5173/checkout
+#   - generates a UUID orderId client-side
+#   - POST /api/payments/intent creates a PaymentIntent (dynamic PMs)
+#   - PaymentElement renders every dashboard-enabled method
+#   - submit with test card 4242… for happy path
+#     or 4000 00 25 0000 3155 for 3DS challenge
+
+# seed practice objects (Stage 1)
+bun run seed
+bun run seed -- --cleanup           # also clean up
+bun run seed -- --tag=<old> --cleanup   # recover orphans from a failed run
 ```
 
-Stage 2 adds the web app; Stage 3 adds `stripe listen` to the dev script.
+### Environment precedence
+
+Bun auto-loads `.env` then `.env.$NODE_ENV` then `.env.local`; shell and CI
+environment variables override all of the above. `STRIPE_SECRET_KEY` must
+start with `sk_test_` and `VITE_STRIPE_PUBLISHABLE_KEY` with `pk_test_` —
+live keys are rejected at startup in both the server (`loadEnv`) and the
+web bundle (`lib/stripe.ts`).
+
+Stage 3 will add `stripe listen` to the dev script.
 
 ## Layout
 
 ```
-apps/web/        TanStack Router app
-apps/api/        Hono server
-packages/shared/ Zod schemas
-scripts/         Stripe seeding utilities
-docs/plans/      Design docs
-docs/audits/     /codex + /code-review outputs per stage
-docs/notes/      Learning notes
+apps/web/           TanStack Router app (Vite, React 19, Stripe Elements)
+apps/api/           Hono server
+  src/db.ts         bun:sqlite orders table
+  src/routes/       Hono route modules
+apps/api/.data/     SQLite file lives here (gitignored)
+packages/shared/    Zod schemas shared by web + api + scripts
+scripts/            Stripe seeding utilities
+docs/plans/         Design docs
+docs/audits/        /codex + /code-review outputs per stage
+docs/notes/         Learning notes + observations per stage
 ```
 
 ## Scope (what this repo is NOT)
