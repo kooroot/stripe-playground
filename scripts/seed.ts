@@ -1,37 +1,68 @@
-#!/usr/bin/env bun
 /**
  * Stage 1 seed: hands-on practice with Stripe's core objects.
- * Creates one Customer, one Product, one one-time Price, one recurring Price,
- * lists them, and (if `--cleanup`) deletes the objects this run created.
  *
- * Usage:
- *   bun run seed                # create + list
- *   bun run seed -- --cleanup   # create + list + delete
+ * Creates one Customer, one Product, one one-time Price, and one recurring
+ * Price (all tagged `metadata.seed_tag`). Lists them via Stripe Search (with
+ * bounded retry for eventual-consistency). Optionally cleans them up.
+ *
+ * Usage (root scripts pass args through `bun run seed -- ...`):
+ *   bun run seed                         # create + list
+ *   bun run seed -- --cleanup            # create + list + archive/delete
+ *   bun run seed -- --tag=seed-1700... --cleanup  # clean up a prior run only
  */
-import Stripe from "stripe";
 import {
   SeedOneTimePriceSchema,
   SeedProductSchema,
   SeedRecurringPriceSchema,
 } from "@stripe-prototype/shared";
+import { loadEnv } from "../apps/api/src/env";
+import { makeStripe } from "../apps/api/src/stripe";
 
-const secret = Bun.env.STRIPE_SECRET_KEY;
-if (!secret || !secret.startsWith("sk_test_")) {
-  console.error(
-    "STRIPE_SECRET_KEY missing or not a test key (must start with sk_test_).",
-  );
-  process.exit(1);
+type Args = {
+  cleanup: boolean;
+  tag: string | null;
+};
+
+function parseArgs(argv: readonly string[]): Args {
+  let cleanup = false;
+  let tag: string | null = null;
+  for (const a of argv) {
+    if (a === "--cleanup") cleanup = true;
+    else if (a.startsWith("--tag=")) tag = a.slice("--tag=".length);
+  }
+  return { cleanup, tag };
 }
 
-const stripe = new Stripe(secret, { typescript: true });
-const cleanup = process.argv.includes("--cleanup");
-const tag = `seed-${Date.now()}`;
+async function retry<T>(
+  op: () => Promise<T>,
+  predicate: (result: T) => boolean,
+  opts: { attempts: number; baseMs: number; label: string },
+): Promise<T> {
+  let last!: T;
+  for (let i = 0; i < opts.attempts; i++) {
+    last = await op();
+    if (predicate(last)) return last;
+    if (i < opts.attempts - 1) {
+      const waitMs = opts.baseMs * Math.pow(2, i);
+      console.log(
+        `  ... ${opts.label} not ready after attempt ${i + 1}, retrying in ${waitMs}ms`,
+      );
+      await new Promise((r) => setTimeout(r, waitMs));
+    }
+  }
+  return last;
+}
+
+const env = loadEnv();
+const stripe = makeStripe(env.STRIPE_SECRET_KEY);
+const args = parseArgs(process.argv.slice(2));
+const tag = args.tag ?? `seed-${Date.now()}`;
 
 type Created = {
-  customer: Stripe.Customer;
-  product: Stripe.Product;
-  oneTimePrice: Stripe.Price;
-  recurringPrice: Stripe.Price;
+  customerId: string;
+  productId: string;
+  oneTimePriceId: string;
+  recurringPriceId: string;
 };
 
 async function create(): Promise<Created> {
@@ -86,55 +117,115 @@ async function create(): Promise<Created> {
     `✓ price     ${recurringPrice.id} (recurring ${recurring.interval}, ${recurring.unit_amount} ${recurring.currency})`,
   );
 
-  return { customer, product: createdProduct, oneTimePrice, recurringPrice };
+  return {
+    customerId: customer.id,
+    productId: createdProduct.id,
+    oneTimePriceId: oneTimePrice.id,
+    recurringPriceId: recurringPrice.id,
+  };
 }
 
-async function list(tag: string): Promise<void> {
-  console.log(`\n--- listing objects tagged ${tag} ---`);
-  const customers = await stripe.customers.search({
-    query: `metadata['seed_tag']:'${tag}'`,
-  });
+async function list(tag: string): Promise<Created | null> {
+  console.log(`\n--- listing objects tagged ${tag} (via Search, best-effort) ---`);
+  // Stripe's docs use double-quoted metadata query values; single quotes work
+  // on some shards and fail on others. Official syntax is `metadata["key"]:"value"`.
+  const query = `metadata["seed_tag"]:"${tag}"`;
+
+  // Search is eventually consistent — "searchable in less than a minute" per SDK
+  // notes. Retry with exponential backoff instead of a magic sleep.
+  const customers = await retry(
+    () => stripe.customers.search({ query }),
+    (r) => r.data.length > 0,
+    { attempts: 4, baseMs: 750, label: "customer search" },
+  );
+  const products = await retry(
+    () => stripe.products.search({ query }),
+    (r) => r.data.length > 0,
+    { attempts: 4, baseMs: 750, label: "product search" },
+  );
+  const prices = await retry(
+    () => stripe.prices.search({ query }),
+    (r) => r.data.length >= 2,
+    { attempts: 4, baseMs: 750, label: "price search" },
+  );
+
   for (const c of customers.data) {
     console.log(`  customer ${c.id} ${c.email ?? ""}`);
   }
-  const products = await stripe.products.search({
-    query: `metadata['seed_tag']:'${tag}'`,
-  });
   for (const p of products.data) {
     console.log(`  product  ${p.id} ${p.name}`);
   }
-  const prices = await stripe.prices.search({
-    query: `metadata['seed_tag']:'${tag}'`,
-  });
   for (const p of prices.data) {
     console.log(
       `  price    ${p.id} ${p.recurring ? `recurring/${p.recurring.interval}` : "one-time"} ${p.unit_amount} ${p.currency}`,
     );
   }
+
+  if (!customers.data[0] || !products.data[0] || prices.data.length === 0) {
+    console.log(
+      "  (search may still be indexing; cleanup below uses direct IDs, not search)",
+    );
+    return null;
+  }
+  return {
+    customerId: customers.data[0].id,
+    productId: products.data[0].id,
+    oneTimePriceId:
+      prices.data.find((p) => !p.recurring)?.id ?? prices.data[0]!.id,
+    recurringPriceId:
+      prices.data.find((p) => p.recurring)?.id ?? prices.data[0]!.id,
+  };
 }
 
 async function destroy(created: Created): Promise<void> {
-  console.log(`\n--- cleaning up ${tag} ---`);
-  // Prices cannot be deleted, only deactivated.
-  await stripe.prices.update(created.oneTimePrice.id, { active: false });
-  console.log(`✓ price      ${created.oneTimePrice.id} deactivated`);
-  await stripe.prices.update(created.recurringPrice.id, { active: false });
-  console.log(`✓ price      ${created.recurringPrice.id} deactivated`);
-  await stripe.products.del(created.product.id);
-  console.log(`✓ product    ${created.product.id} deleted`);
-  await stripe.customers.del(created.customer.id);
-  console.log(`✓ customer   ${created.customer.id} deleted`);
+  console.log(`\n--- cleaning up ${tag} (best-effort) ---`);
+
+  const tryStep = async (label: string, fn: () => Promise<unknown>) => {
+    try {
+      await fn();
+      console.log(`  ✓ ${label}`);
+    } catch (err) {
+      console.log(
+        `  ✗ ${label} — ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  };
+
+  // Prices cannot be hard-deleted, only deactivated.
+  await tryStep(`deactivate price ${created.oneTimePriceId}`, () =>
+    stripe.prices.update(created.oneTimePriceId, { active: false }),
+  );
+  await tryStep(`deactivate price ${created.recurringPriceId}`, () =>
+    stripe.prices.update(created.recurringPriceId, { active: false }),
+  );
+  // Products with any attached Prices cannot be hard-deleted either — archive
+  // them (active: false) instead. `products.del` would return a 400.
+  await tryStep(`archive product ${created.productId}`, () =>
+    stripe.products.update(created.productId, { active: false }),
+  );
+  await tryStep(`delete customer ${created.customerId}`, () =>
+    stripe.customers.del(created.customerId),
+  );
 }
 
-const created = await create();
-
-// Stripe search is eventually consistent — wait before listing, or the newly
-// created objects may not appear in results.
-await new Promise((r) => setTimeout(r, 2000));
-await list(tag);
-
-if (cleanup) {
-  await destroy(created);
+if (args.tag && !args.cleanup) {
+  // --tag without --cleanup: just list what's under that tag.
+  await list(args.tag);
+} else if (args.tag && args.cleanup) {
+  // --tag with --cleanup: discover by search, clean up. Handles prior runs.
+  const discovered = await list(args.tag);
+  if (discovered) {
+    await destroy(discovered);
+  } else {
+    console.log("  nothing to clean up under that tag");
+  }
+} else {
+  // No --tag: normal "create + list + optional cleanup" flow.
+  const created = await create();
+  await list(tag);
+  if (args.cleanup) {
+    await destroy(created);
+  }
 }
 
 console.log("\nDone.");

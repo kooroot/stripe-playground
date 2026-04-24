@@ -2,7 +2,9 @@ import { z } from "zod";
 
 export const IsoCurrencySchema = z
   .string()
-  .length(3)
+  .regex(/^[A-Za-z]{3}$/, {
+    message: "currency must be a 3-letter ISO code (e.g. usd, eur)",
+  })
   .transform((s) => s.toLowerCase());
 
 export const SeedProductSchema = z.object({
