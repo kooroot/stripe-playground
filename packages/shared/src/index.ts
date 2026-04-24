@@ -66,15 +66,24 @@ export type CreatePaymentIntentResponse = z.infer<
 
 // ---------- Stage 3: webhook-authoritative order status ----------
 
-// Authoritative per-order state. `succeeded|failed|refunded` are TERMINAL and
-// only set by webhook handlers. Everything else mirrors the PaymentIntent
-// status the create-or-reuse route wrote. The redirect_status query param on
-// /checkout/success is advisory — the source of truth is this enum, pulled
-// via GET /api/payments/order/:orderId after the webhook lands.
+// Authoritative per-order state. `succeeded|failed|refunded|canceled` are
+// TERMINAL. `succeeded|failed|refunded` are only set by webhook handlers;
+// everything else mirrors the PaymentIntent status the create-or-reuse route
+// wrote. The redirect_status query param on /checkout/success is advisory —
+// source of truth is this enum, pulled via GET /api/payments/order/:orderId
+// after the webhook lands.
+//
+// `requires_capture` is included for type-system closure: Stripe's
+// PaymentIntent.Status union includes it, and while today's create path uses
+// automatic capture (so the status is unreachable), the `insertOrder` path
+// would otherwise silently fail-cast on any future intent created with
+// capture_method: "manual". Keeps GET /order/:orderId from 500-ing in that
+// case.
 export const OrderStatusSchema = z.enum([
   "requires_payment_method",
   "requires_confirmation",
   "requires_action",
+  "requires_capture",
   "processing",
   "succeeded",
   "failed",
