@@ -3,9 +3,7 @@ dist/
 build/
 .turbo/
 
-.env
-.env.local
-.env.*.local
+.env*
 !.env.example
 
 *.log
@@ -13,10 +11,11 @@ build/
 
 *.tsbuildinfo
 
-stripe-prototype.db
-stripe-prototype.db-journal
-stripe-prototype.db-wal
-stripe-prototype.db-shm
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+apps/api/.data/
 
 .vite/
 .bun/

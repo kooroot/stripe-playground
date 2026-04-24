@@ -15,6 +15,16 @@ Hands-on learning of Stripe's payment primitives (Payment Intents, Elements, Che
 - **Subscription/Connect flows** beyond a short Stage 5 extension. Track B/C are future projects.
 - **Production deployment.** Everything runs in Stripe test mode; no production API keys, no live business registration.
 
+## Accept-Side Jurisdiction (Critical)
+
+**Stripe Stablecoin Payments accept is US-business-only** as of 2026-04. The owning entity here is KR-based, so while this prototype will exercise the full API surface in **test mode** (country-agnostic), *shipping stablecoin accept into the main production app requires a separate path*:
+
+- Circle Payments direct integration (mint/receive USDC)
+- Coinbase Commerce (hosted crypto checkout)
+- US subsidiary registered for Stripe stablecoin accept
+
+Stage 5 explicitly produces a decision memo (`docs/notes/stablecoin-accept-jurisdiction-decision.md`) comparing these options. Card payments and Stripe Checkout/Elements itself have no such constraint.
+
 ## Stack
 
 | Layer | Choice | Rationale |
@@ -87,8 +97,10 @@ Each stage ends with: (1) `tsc --noEmit` clean, (2) manual end-to-end verificati
 
 ### Stage 2 — PaymentIntent + Elements (card + stablecoin) (2.5–3 days)
 
+- **Payment method selection:** default to Stripe's dynamic/automatic payment methods (omit `payment_method_types` and use dashboard-driven PM availability) so Payment Element can surface all eligible methods without us hardcoding the list. Pin Stripe API version explicitly on the SDK client. A separate experiment commit in this stage may also exercise manual `payment_method_types: ['card', 'crypto']` for comparison — documented as a secondary path, not the baseline.
+- **Order-keyed PaymentIntent:** the API creates-or-reuses a PaymentIntent per `orderId` (server-generated UUID stored in SQLite `orders` table), not per request. Every response attaches `metadata.order_id`. Retries from the browser hit the same intent. This replaces the earlier "amount+currency → new intent each call" shape.
 - `apps/api`:
-  - `POST /api/payments/intent` — amount+currency → create PaymentIntent with `payment_method_types: ['card', 'crypto']`, return `client_secret`, idempotency key from header
+  - `POST /api/payments/intent` — body `{ orderId, amount, currency }` → look up existing open intent for `orderId`; if none, create; always respond with `client_secret`. `Idempotency-Key` header surfaced to Stripe SDK.
   - Zod validation on input; shared schema in `packages/shared`
 - `apps/web`:
   - Route `/checkout` — TanStack Query `useMutation` to create intent, `<Elements>` + `<PaymentElement>`
@@ -124,31 +136,37 @@ Each stage ends with: (1) `tsc --noEmit` clean, (2) manual end-to-end verificati
 - Comparison table in `docs/notes/stage-4-elements-vs-checkout.md`
 - Commit + push + audit
 
-### Stage 5 — Stablecoin deep-dive + Tempo watch (1 day)
+### Stage 5 — Stablecoin deep-dive + jurisdiction decision + Tempo watch (1 day)
 
-- Recurring stablecoin subscription with a recurring Price
-- Stablecoin refund flow (USDC back to original wallet)
-- `docs/notes/tempo-watch.md` — current Tempo status, what changes would need to happen for general API exposure
-- `docs/notes/main-app-integration-checklist.md` — paste-ready checklist for main app
+- **Recurring stablecoin subscriptions** *only if* the Stripe account has preview access enabled at time of execution (check dashboard → Payment methods → Stablecoins → recurring status). If not available, skip and flag as "gated on Stripe preview" in the notes.
+- **One-time stablecoin refund flow** (USDC back to original wallet) — always attempted, not preview-gated.
+- `docs/notes/stablecoin-accept-jurisdiction-decision.md` — **decision memo** for the main app: Circle Payments direct vs Coinbase Commerce vs US subsidiary vs "defer stablecoin accept." Include cost/complexity/regulatory comparison.
+- `docs/notes/tempo-watch.md` — current Tempo status, what changes would need to happen for general API exposure.
+- `docs/notes/main-app-integration-checklist.md` — paste-ready checklist for main app.
 - Commit + push + audit
 
 ## Audit Protocol
 
-After every stage's implementation commit:
+Every stage lands via its own `stage/N-<name>` branch and pull request. After implementation is committed:
 
-1. `/codex review` — Codex rescue subagent pass
-2. `/code-review` — code-review skill pass
-3. Merge findings into `docs/audits/stage-N-audit.md`
-4. Fix any: security issues (e.g. unverified webhooks, exposed secrets), correctness issues (idempotency gaps, race conditions), or type-safety gaps
-5. New commit: `fix(stage-N): address audit findings - <summary>`
-6. Re-push
-7. Only then unblock next stage's task
+1. `/codex` — Codex rescue subagent review pass
+2. `/code-review` — code-review skill pass (independent second opinion)
+3. Consolidate findings into `docs/audits/stage-N-audit.md` (one file per stage, with severity-tagged punch list and an "explicitly verified correct" section)
+4. Classify each finding:
+   - **BLOCKER** — stage reopens; PR cannot merge until fixed on the same branch
+   - **MAJOR** — fix on the same branch before merge (security, correctness, type-safety, plan divergence)
+   - **MINOR / NIT** — open a GitHub issue on `kooroot/stripe-playground`, labeled `stage-N` + `minor`/`nit`, linked from the PR description; may defer to a later stage
+5. Fix commit(s) on the stage branch: `fix(stage-N): <finding>` — one commit per grouped finding when practical
+6. Re-push; the PR absorbs fix commits
+7. When both reviews return clean (or only open issues remain), squash-merge the PR to `main`
+8. Only then unblock the next stage's task
 
 ## Known Constraints
 
-- **Accept-side nationality limit:** Stripe Stablecoin Payments accept is US-businesses-only. Prototype runs in test mode where this doesn't matter; production integration of stablecoin accept for a KR entity is blocked — follow-up decision needed (Circle direct, Coinbase Commerce, or US subsidiary).
+- **Accept-side nationality limit:** already surfaced above in "Accept-Side Jurisdiction." Stage 5 delivers the decision memo.
 - **Tempo opacity:** Tempo not in public Stripe API. Re-evaluate at main-app integration time.
-- **Context decay discipline (CLAUDE.md):** re-read files before editing, grep for all reference forms when renaming, run `tsc --noEmit` before claiming completion.
+- **Recurring stablecoin:** Stripe's recurring stablecoin subscription feature may be in private preview at execution time. Stage 5 gates this check before attempting the flow.
+- **Context decay discipline (CLAUDE.md):** re-read files before editing, grep for all reference forms when renaming, run typecheck before claiming completion.
 
 ## Success Criteria
 
