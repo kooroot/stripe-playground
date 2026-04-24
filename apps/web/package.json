@@ -1,0 +1,15 @@
+{
+  "name": "web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "echo 'stage 2+: vite'",
+    "typecheck": "tsc -b"
+  },
+  "dependencies": {
+    "@stripe-prototype/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4"
+  }
+}
