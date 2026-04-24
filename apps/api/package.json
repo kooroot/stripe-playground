@@ -7,10 +7,13 @@
     "typecheck": "tsc -b"
   },
   "dependencies": {
-    "@stripe-prototype/shared": "workspace:*"
+    "@stripe-prototype/shared": "workspace:*",
+    "hono": "^4.12.14",
+    "stripe": "^22.1.0",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
-    "bun-types": "latest",
+    "bun-types": "1.2.8",
     "typescript": "^5.5.4"
   }
 }
