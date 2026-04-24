@@ -87,10 +87,13 @@ export function checkoutRoutes(deps: {
         }
       }
 
-      // success_url uses our order_id anchor (not Stripe's
-      // {CHECKOUT_SESSION_ID} template) so the success page polls the same
-      // GET /api/payments/order/:orderId endpoint as the Elements flow.
-      const successUrl = `${deps.appBaseUrl}/checkout-hosted/success?order_id=${orderId}`;
+      // success_url anchors on our order_id so the success page polls the
+      // same GET /api/payments/order/:orderId endpoint as the Elements flow.
+      // It ALSO includes Stripe's {CHECKOUT_SESSION_ID} template (per Stripe's
+      // recommendation) — we don't strictly need it today (order_id is
+      // sufficient to poll), but having the session id in the URL is a
+      // first-class join key for support/debugging.
+      const successUrl = `${deps.appBaseUrl}/checkout-hosted/success?order_id=${orderId}&session_id={CHECKOUT_SESSION_ID}`;
       const cancelUrl = `${deps.appBaseUrl}/checkout-hosted/cancel?order_id=${orderId}`;
 
       let session: Stripe.Checkout.Session;
@@ -171,9 +174,17 @@ export function checkoutRoutes(deps: {
         });
         status = "new";
       } else {
-        // Defensive: mode=payment should always populate payment_intent.
-        // If Stripe ever changes that, we'd be writing a null into a NOT NULL
-        // column — fail loud instead of poisoning the row.
+        // Stripe's Session type has `payment_intent: string | null`. In
+        // practice for mode=payment, a PI is created synchronously at
+        // session create and this branch should be unreachable — but codex
+        // review flagged it's documented-as-possible. If we ever hit it,
+        // log the session context so we can investigate without waiting for
+        // a user to reproduce. Stage 5 (stablecoin deep dive) is the most
+        // likely place to discover this in anger; at that point, defer the
+        // insert to payment_intent.created with session.metadata.order_id.
+        console.error(
+          `[checkout] session has null payment_intent: sessionId=${session.id} status=${session.status} payment_status=${session.payment_status}`,
+        );
         return c.json(
           { ok: false, error: { type: "stripe_missing_intent" } },
           500,

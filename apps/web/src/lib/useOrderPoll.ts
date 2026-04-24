@@ -10,6 +10,22 @@ import { getOrder } from "./api";
 // either stuck upstream (Stripe side) or our handler threw after the
 // idempotency gate burned the event.id — in either case, further polling
 // won't help; the user needs to check the dashboard or server log.
+//
+// ASSUMPTIONS (document-then-fix):
+//
+// - SPA-only: `useMemo(() => Date.now(), [])` captures the user's browser
+//   clock at mount. If this hook ever runs in an SSR/Next.js "use server"
+//   context, the anchor would be server clock — wrong. Under TanStack
+//   Router's SPA setup today that's fine; migrate to a client-only
+//   lazy-init useState if SSR lands.
+//
+// - Component remount resets the 2-minute budget. A user who navigates away
+//   and comes back triggers a fresh poll window.
+//
+// - `timedOutRef` is a one-shot tripwire: once set to true, it stays true
+//   for the lifetime of the hook instance. Currently no consumer exposes a
+//   "retry" button; if one is added, it must clear the ref inside its
+//   invalidation path to avoid permanent timeout-true state.
 export const MAX_POLL_MS = 120_000;
 export const POLL_INTERVAL_MS = 2000;
 

@@ -103,6 +103,18 @@ For the main-app integration this prototype feeds into: default to **Elements fo
 
 ## Outstanding questions for Stage 4 audit
 
-- Should the hosted-session `status: "reused"` return path also verify the prior session is still `open` (not `complete`/`expired`)? Current code 409s on terminal order status, but an `open` session for a non-terminal order just idempotently returns the same URL — which could be the WRONG URL if we changed the `success_url` between calls (we don't today, but fragile).
-- `/checkout-hosted/cancel` does not mutate the DB. The `checkout.session.expired` handler does, but only after 24h. Is there a case where we should eagerly mark canceled on cancel_url hit? (Answer: no — user might still complete from the Stripe page if they reopen; only the session going terminal is authoritative.)
+- Should the hosted-session `status: "reused"` return path also verify the prior session is still `open` (not `complete`/`expired`)? Current code 409s on terminal order status, but an `open` session for a non-terminal order just idempotently returns the same URL — which could be the WRONG URL if we changed the `success_url` between calls (we don't today, but fragile). **[Audit note]** code-reviewer m3 confirmed this is a prototype-scope choice; Elements analog calls `paymentIntents.retrieve()`, Checkout does not (would require persisting session.id). Left as-is; revisit if APP_BASE_URL ever becomes runtime-dynamic (ngrok tunnel etc).
+- `/checkout-hosted/cancel` does not mutate the DB. The `checkout.session.expired` handler does, but only after 24h. Is there a case where we should eagerly mark canceled on cancel_url hit? (Answer: no — user might still complete from the Stripe page if they reopen; only the session going terminal is authoritative.) **[Audit note]** code-reviewer n4 + codex Q8 converged: correct design. The alternative (eager cancel on cancel_url visit) would race with a user who closes the page but completes via back-button.
 - Bundle-size claim in the comparison table ("hosted = 0 on redirect path"): verify with `bun --filter web build` (not done yet — Stage 4 doesn't wire prod build).
+
+## Known limitations flagged during audit
+
+- **`session.payment_intent: null` on mode=payment** — Stripe types this as nullable, but in practice our flow creates a PI synchronously at session create. The 500 defensive branch in `checkout.ts` will log `sessionId/status/payment_status` if it ever fires. If it does, Stage 5 (stablecoin) is the likely suspect — the real fix is to defer the `insertOrder` until `payment_intent.created` lands with `metadata.order_id`. Deferred because the prototype's card path never reaches the null case.
+
+- **`useOrderPoll` is SPA-only** — `useMemo(() => Date.now(), [])` captures the browser clock. If this project ever adds SSR, the anchor would be wrong. Documented in the hook itself with the migration path (client-only lazy useState).
+
+- **`timedOutRef` is a one-shot tripwire** — no current consumer exposes a retry button. If one is added, the refetch path must clear the ref; otherwise `timedOut` stays true forever once set.
+
+- **Reused-session branch doesn't `sessions.retrieve`** — Elements analog does. If APP_BASE_URL changed between calls, the returned URL could have a stale origin. Not a bug today (APP_BASE_URL is server-static), but catalogued.
+
+- **`checkout.session.async_payment_succeeded/failed`** are handled (Stage 4 audit added these). Without them, async-PM orders would stay `processing` forever even after payment settlement, relying solely on PI events.
