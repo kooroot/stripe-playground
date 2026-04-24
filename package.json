@@ -8,9 +8,11 @@
   ],
   "scripts": {
     "typecheck": "bun --filter '*' typecheck",
-    "dev": "echo 'Stage 1+: wired up then'; exit 1"
+    "dev": "concurrently -k -n api -c green \"bun --filter api dev\"",
+    "seed": "bun run scripts/seed.ts"
   },
   "devDependencies": {
+    "concurrently": "^9.2.1",
     "typescript": "^5.5.4"
   }
 }

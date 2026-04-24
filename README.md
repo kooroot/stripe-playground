@@ -6,7 +6,7 @@ Full design and stage plan: [docs/plans/2026-04-24-stripe-prototype-track-a-desi
 
 ## Status
 
-Scaffold stage (Stage 0). No code yet — see design doc for the staged rollout.
+Stage 1 — Stripe CLI + seed script. Bun workspace, Hono API skeleton with `/health` probing `stripe.balance.retrieve()`, and `scripts/seed.ts` creating Customer/Product/Prices in test mode.
 
 ## Stack
 
@@ -17,13 +17,25 @@ Scaffold stage (Stage 0). No code yet — see design doc for the staged rollout.
 - **Shared types:** Zod via `packages/shared`
 - **Payments:** `stripe` SDK, Stripe CLI for local webhook forwarding
 
-## Quickstart (after Stage 1)
+## Quickstart
 
 ```bash
 bun install
-cp .env.example .env   # fill in test keys
-bun run dev            # web + api + stripe listen
+cp .env.example .env   # fill in STRIPE_SECRET_KEY + VITE_STRIPE_PUBLISHABLE_KEY (test mode)
+
+# one-time Stripe CLI login (opens a browser)
+stripe login
+
+# seed practice objects (Customer + Product + Prices)
+bun run seed
+bun run seed -- --cleanup   # same + delete at the end
+
+# start the api (Hono on Bun)
+bun run dev
+curl http://localhost:8787/health   # should return {ok:true, mode:"test"}
 ```
+
+Stage 2 adds the web app; Stage 3 adds `stripe listen` to the dev script.
 
 ## Layout
 
