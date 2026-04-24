@@ -17,7 +17,11 @@ type HandledEvent =
   | "payment_intent.processing"
   | "payment_intent.requires_action"
   | "payment_intent.canceled"
-  | "charge.refunded";
+  | "charge.refunded"
+  | "checkout.session.completed"
+  | "checkout.session.expired"
+  | "checkout.session.async_payment_succeeded"
+  | "checkout.session.async_payment_failed";
 
 const HANDLED_EVENTS: ReadonlySet<string> = new Set<HandledEvent>([
   "payment_intent.succeeded",
@@ -26,6 +30,19 @@ const HANDLED_EVENTS: ReadonlySet<string> = new Set<HandledEvent>([
   "payment_intent.requires_action",
   "payment_intent.canceled",
   "charge.refunded",
+  // Stage 4: hosted-Checkout-specific events. They race with the underlying
+  // payment_intent.* events, but the idempotency gate (per event.id) plus
+  // the terminal-status guard in db.updateOrderStatus make the combined flow
+  // safe — first wins and late arrivals can't downgrade.
+  "checkout.session.completed",
+  "checkout.session.expired",
+  // async_payment_* fire for delayed settlement PMs (stablecoin, BACS, SEPA)
+  // after `checkout.session.completed` already landed with payment_status:
+  // "unpaid". These ARE the terminal signals for async Checkout flows, not
+  // the PI events — though PI events also fire and converge on the same
+  // status via the terminal guard.
+  "checkout.session.async_payment_succeeded",
+  "checkout.session.async_payment_failed",
 ]);
 
 export function webhookRoutes(deps: {
@@ -151,6 +168,70 @@ async function dispatch(event: Stripe.Event, db: Db): Promise<void> {
       const order = db.getOrderByIntent(pi);
       if (!order) return;
       db.updateOrderStatus(order.order_id, "refunded");
+      return;
+    }
+    case "checkout.session.completed": {
+      // Fires when the hosted session hits `status: "complete"`. For
+      // mode: "payment" that's `payment_status: "paid"` for synchronous PMs,
+      // or `unpaid` + a still-processing PI for async PMs (stablecoin,
+      // bank debits, etc.). Only flip to "succeeded" when the session says
+      // paid; otherwise defer to the payment_intent.* events.
+      const session = event.data.object as Stripe.Checkout.Session;
+      const orderId =
+        session.metadata?.order_id ?? session.client_reference_id ?? null;
+      if (!orderId) return;
+      if (session.payment_status === "paid") {
+        db.updateOrderStatus(orderId, "succeeded");
+      }
+      return;
+    }
+    case "checkout.session.expired": {
+      // 24h default expiry with no completed payment. Terminal for the
+      // session, but we don't auto-flip to "canceled" for every state: if
+      // the PI is processing (async PM still resolving), the PI events are
+      // authoritative and the session expiry is informational. Cancel
+      // eagerly only for states that represent "user never finished":
+      //
+      //   requires_payment_method  — never entered payment details
+      //   requires_confirmation    — entered but didn't submit
+      //   requires_action          — started 3DS challenge and walked away
+      //
+      // `requires_action` is included as a safety net: Stripe separately
+      // fires `payment_intent.canceled` for abandoned 3DS intents, but if
+      // that delivery ever lags or gets lost, this guarantees the order
+      // doesn't stay stuck. The terminal-status guard in
+      // db.updateOrderStatus prevents double-writes if PI.canceled lands
+      // first.
+      const session = event.data.object as Stripe.Checkout.Session;
+      const orderId =
+        session.metadata?.order_id ?? session.client_reference_id ?? null;
+      if (!orderId) return;
+      const order = db.getOrder(orderId);
+      if (!order) return;
+      if (
+        order.status === "requires_payment_method" ||
+        order.status === "requires_confirmation" ||
+        order.status === "requires_action"
+      ) {
+        db.updateOrderStatus(orderId, "canceled");
+      }
+      return;
+    }
+    case "checkout.session.async_payment_succeeded":
+    case "checkout.session.async_payment_failed": {
+      // For delayed-settlement PMs (stablecoin, BACS, SEPA), these are the
+      // terminal signals for the Checkout surface — the session stays at
+      // `status: processing` until they fire. PI events also fire in
+      // parallel; the terminal-status guard absorbs the race.
+      const session = event.data.object as Stripe.Checkout.Session;
+      const orderId =
+        session.metadata?.order_id ?? session.client_reference_id ?? null;
+      if (!orderId) return;
+      const nextStatus =
+        event.type === "checkout.session.async_payment_succeeded"
+          ? "succeeded"
+          : "failed";
+      db.updateOrderStatus(orderId, nextStatus);
       return;
     }
     default:

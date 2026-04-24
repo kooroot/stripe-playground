@@ -116,13 +116,26 @@ export async function openDb(envPath: string): Promise<Db> {
   // status is the only mutable column after insert. amount, currency, and
   // payment_intent_id are immutable per orderId by design — letting them
   // drift would hide order_mismatch bugs and break idempotency-key semantics.
+  //
+  // Terminal-state guard: once an order reaches a terminal status
+  // (succeeded / failed / refunded / canceled), a later out-of-order webhook
+  // delivery MUST NOT downgrade it. Stripe redelivers events on any non-2xx
+  // and on manual `stripe events resend` — a reanimated `payment_intent.
+  // processing` hitting after a terminal transition would otherwise revert
+  // the order to `processing` and hang the UI poll. The one legitimate
+  // terminal-to-terminal transition is `succeeded -> refunded` (charge.refunded
+  // handler); everything else is blocked by this WHERE clause.
   const updateStatusStmt = conn.query<
     unknown,
     { order_id: string; status: string; ts: number }
   >(
     `UPDATE orders
        SET status = $status, updated_at = $ts
-     WHERE order_id = $order_id`,
+     WHERE order_id = $order_id
+       AND (
+         status NOT IN ('succeeded','failed','refunded','canceled')
+         OR ($status = 'refunded' AND status = 'succeeded')
+       )`,
   );
   // INSERT OR IGNORE: duplicate event.id yields 0 row changes, which is the
   // signal for "Stripe re-delivered, skip". Wrapped in a dedicated method so
