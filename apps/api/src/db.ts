@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { mkdir } from "node:fs/promises";
 import { dirname, isAbsolute, join } from "node:path";
+import type { OrderStatus } from "@stripe-prototype/shared";
 
 // Resolve relative DATABASE_URL from the apps/api package root, not the
 // caller's CWD. One-place fix for stage-0/#6 and stage-1/#10 — running
@@ -31,9 +32,14 @@ export type Db = {
   getOrder(orderId: string): OrderRow | null;
   getOrderByIntent(paymentIntentId: string): OrderRow | null;
   insertOrder(
-    row: Omit<OrderRow, "created_at" | "updated_at">,
+    row: Omit<OrderRow, "created_at" | "updated_at" | "status"> & {
+      status: OrderStatus;
+    },
   ): void;
-  updateOrderStatus(orderId: string, status: string): void;
+  // OrderStatus-typed so callers can't smuggle in an unknown string; the
+  // shared enum is the canonical contract and the GET /order route will
+  // 500 on anything outside it.
+  updateOrderStatus(orderId: string, status: OrderStatus): void;
   // Webhook idempotency: returns true iff this event.id was newly recorded.
   // A false return means Stripe is re-delivering — skip the handler body.
   markEventProcessed(eventId: string, eventType: string): boolean;

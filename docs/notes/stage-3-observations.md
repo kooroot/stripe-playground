@@ -32,6 +32,22 @@ Stripe docs guarantee at-least-once delivery. The replay surface includes:
 
 **Known limitation for this prototype:** the insert is NOT in the same transaction as the handler's order-status update. A crash between `markEventProcessed` returning true and `updateOrderStatus` running would leave the event marked processed but the order un-transitioned — on next delivery the idempotency gate blocks the replay. Production would wrap both in `BEGIN IMMEDIATE; ... COMMIT` (bun:sqlite's `db.transaction(() => { ... })()` helper).
 
+**UI backstop for that failure mode:** `/checkout/success` caps polling at 2 minutes (`MAX_POLL_MS` in `apps/web/src/routes/checkout/success.tsx`). After the cap, the page shows "webhook didn't land in 2 minutes — check the Stripe dashboard or server log" instead of spinning forever.
+
+## Security note — DO NOT paste `GET /order/:orderId` into the real integration as-is
+
+`GET /api/payments/order/:orderId` is **unauthenticated** in this prototype. The orderId is a UUIDv4 (unguessable in practice), but the endpoint exposes `amount`, `currency`, `paymentIntentId`, `updatedAt`, and `status` — and anything fetching the URL will get a response. Today there is no real data and no auth model, which is fine for learning. Before pasting this into the main app:
+
+1. Bind order ownership to the session (customer_id or account_id from the logged-in user's cookie/JWT).
+2. Reject the request if the session's account doesn't own the orderId.
+3. Never return `paymentIntentId` to a caller that doesn't own the order — it's not secret in the Stripe sense, but leaking it makes cross-account correlation trivial.
+
+Flagged by code-reviewer in the Stage 3 audit (M2). Not fixed in the prototype because the scope is "test mode, no auth model"; captured here so the pattern doesn't get paste-copied into production.
+
+## Dev-script ordering note (observed)
+
+`concurrently --kill-others-on-fail` launches web / api / `stripe listen` in parallel. If `stripe listen` connects and Stripe dispatches a backlog event before the api binds 8787, the CLI logs a connection error for that one event and retries. No data loss — the retry succeeds once the api is up. If this gets annoying, add a small `--delay` on the stripe listen command or split into two scripts (start api, then start listen). Not worth fixing unless it recurs.
+
 ## Manual verification checklist
 
 1. **Setup**:

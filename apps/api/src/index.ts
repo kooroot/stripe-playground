@@ -35,7 +35,7 @@ if (env.STRIPE_WEBHOOK_SECRET) {
 }
 
 app.get("/", (c) =>
-  c.json({ ok: true, stage: 1, api_version: STRIPE_API_VERSION }),
+  c.json({ ok: true, stage: 3, api_version: STRIPE_API_VERSION }),
 );
 
 app.get("/health", async (c) => {
