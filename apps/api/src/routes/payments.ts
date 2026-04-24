@@ -3,6 +3,8 @@ import Stripe from "stripe";
 import {
   CreatePaymentIntentRequestSchema,
   type CreatePaymentIntentResponse,
+  type GetOrderResponse,
+  OrderStatusSchema,
 } from "@stripe-prototype/shared";
 import type { Db } from "../db";
 
@@ -46,6 +48,38 @@ function shapeReuseResponse(
 
 export function paymentsRoutes(deps: { stripe: Stripe; db: Db }): Hono {
   const app = new Hono();
+
+  // DB-authoritative order status, fed by webhook transitions. The success
+  // page polls this after redirect instead of trusting `redirect_status`.
+  app.get("/order/:orderId", (c) => {
+    const orderId = c.req.param("orderId");
+    const row = deps.db.getOrder(orderId);
+    if (!row) {
+      return c.json({ ok: false, error: { type: "not_found" } }, 404);
+    }
+    const status = OrderStatusSchema.safeParse(row.status);
+    if (!status.success) {
+      // Row has a status the shared schema doesn't know about — treat as a
+      // server-side invariant violation so we notice instead of returning
+      // stale/unknown state to the UI.
+      return c.json(
+        {
+          ok: false,
+          error: { type: "unknown_status", value: row.status },
+        },
+        500,
+      );
+    }
+    const res: GetOrderResponse = {
+      orderId: row.order_id,
+      paymentIntentId: row.payment_intent_id,
+      amount: row.amount,
+      currency: row.currency,
+      status: status.data,
+      updatedAt: row.updated_at,
+    };
+    return c.json(res);
+  });
 
   app.post("/intent", async (c) => {
     const body = await c.req.json().catch(() => null);

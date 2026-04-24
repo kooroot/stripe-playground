@@ -8,7 +8,8 @@
   ],
   "scripts": {
     "typecheck": "bun --filter '*' typecheck",
-    "dev": "concurrently -k -n web,api -c cyan,green \"bun --filter web dev\" \"bun --filter api dev\"",
+    "dev": "concurrently --kill-others-on-fail -n web,api -c cyan,green \"bun --filter web dev\" \"bun --filter api dev\"",
+    "dev:webhooks": "concurrently --kill-others-on-fail -n web,api,stripe -c cyan,green,magenta \"bun --filter web dev\" \"bun --filter api dev\" \"stripe listen --forward-to http://127.0.0.1:8787/api/webhooks/stripe\"",
     "seed": "bun run scripts/seed.ts"
   },
   "devDependencies": {

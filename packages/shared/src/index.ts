@@ -63,3 +63,39 @@ export const CreatePaymentIntentResponseSchema = z.object({
 export type CreatePaymentIntentResponse = z.infer<
   typeof CreatePaymentIntentResponseSchema
 >;
+
+// ---------- Stage 3: webhook-authoritative order status ----------
+
+// Authoritative per-order state. `succeeded|failed|refunded` are TERMINAL and
+// only set by webhook handlers. Everything else mirrors the PaymentIntent
+// status the create-or-reuse route wrote. The redirect_status query param on
+// /checkout/success is advisory — the source of truth is this enum, pulled
+// via GET /api/payments/order/:orderId after the webhook lands.
+export const OrderStatusSchema = z.enum([
+  "requires_payment_method",
+  "requires_confirmation",
+  "requires_action",
+  "processing",
+  "succeeded",
+  "failed",
+  "refunded",
+  "canceled",
+]);
+export type OrderStatus = z.infer<typeof OrderStatusSchema>;
+
+export const TERMINAL_ORDER_STATUSES: ReadonlySet<OrderStatus> = new Set([
+  "succeeded",
+  "failed",
+  "refunded",
+  "canceled",
+]);
+
+export const GetOrderResponseSchema = z.object({
+  orderId: z.string(),
+  paymentIntentId: z.string(),
+  amount: z.number().int(),
+  currency: z.string(),
+  status: OrderStatusSchema,
+  updatedAt: z.number().int(),
+});
+export type GetOrderResponse = z.infer<typeof GetOrderResponseSchema>;
