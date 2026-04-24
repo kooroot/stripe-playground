@@ -91,7 +91,7 @@ function CheckoutPage() {
               appearance: { theme: "stripe" },
             }}
           >
-            <PaymentForm />
+            <PaymentForm orderId={orderId} />
           </Elements>
         </>
       )}
@@ -114,7 +114,7 @@ function CheckoutPage() {
   );
 }
 
-function PaymentForm() {
+function PaymentForm({ orderId }: { orderId: string }) {
   const stripe = useStripe();
   const elements = useElements();
   const [submitting, setSubmitting] = useState(false);
@@ -132,10 +132,15 @@ function PaymentForm() {
     setSubmitting(true);
     setErr(null);
 
+    // order_id ride-along: Stripe echoes unknown query params back on the
+    // success redirect. The success page uses this to poll the API for the
+    // webhook-authoritative order status instead of trusting redirect_status.
+    const returnUrl = new URL(`${window.location.origin}/checkout/success`);
+    returnUrl.searchParams.set("order_id", orderId);
     const { error } = await stripe.confirmPayment({
       elements,
       confirmParams: {
-        return_url: `${window.location.origin}/checkout/success`,
+        return_url: returnUrl.toString(),
       },
     });
 
