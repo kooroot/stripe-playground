@@ -3,52 +3,39 @@ import { z } from "zod";
 import { TERMINAL_ORDER_STATUSES } from "@stripe-prototype/shared";
 import { useOrderPoll } from "../../lib/useOrderPoll";
 
-// Stripe appends its own redirect keys (payment_intent,
-// payment_intent_client_secret, redirect_status); we also ride along
-// `order_id` from confirmPayment's return_url to anchor the DB poll.
-// Any future PM type may add more keys (setup_intent, source_redirect_slug),
-// so passthrough keeps them instead of tripping validateSearch.
+// Stripe hosted Checkout typically appends `session_id` / `payment_intent` on
+// success_url. We only need `order_id` for the poll, but we accept the
+// others and passthrough anything else for forward-compat.
 const SearchSchema = z
   .object({
-    payment_intent: z.string().optional(),
-    payment_intent_client_secret: z.string().optional(),
-    redirect_status: z
-      .enum(["succeeded", "processing", "requires_action", "failed"])
-      .optional(),
     order_id: z.string().optional(),
+    session_id: z.string().optional(),
   })
   .passthrough();
 
-export const Route = createFileRoute("/checkout/success")({
-  component: SuccessPage,
+export const Route = createFileRoute("/checkout-hosted/success")({
+  component: HostedSuccessPage,
   validateSearch: SearchSchema,
 });
 
-function SuccessPage() {
-  const search = useSearch({ from: "/checkout/success" });
+function HostedSuccessPage() {
+  const search = useSearch({ from: "/checkout-hosted/success" });
   const orderId = search.order_id;
   const { order, isLoading, error, isNonTerminal, timedOut } =
     useOrderPoll(orderId);
 
   return (
     <div>
-      <h1>payment submitted (Elements)</h1>
+      <h1>payment submitted (hosted Checkout)</h1>
       <p>
-        Stripe returned here after confirmPayment. Ground truth is the{" "}
-        <code>payment_intent.succeeded</code> webhook — this page polls the
-        API for the DB-authoritative order status instead of trusting{" "}
-        <code>redirect_status</code>.
+        Stripe-hosted Checkout returned here after a paid or still-processing
+        session. Two webhooks converge on this order: the
+        Checkout-specific <code>checkout.session.completed</code> and the
+        universal <code>payment_intent.succeeded</code>. First-wins via the
+        idempotency gate in <code>processed_events</code>.
       </p>
       <dl>
-        <dt>payment_intent</dt>
-        <dd>
-          <code>{search.payment_intent ?? "—"}</code>
-        </dd>
-        <dt>redirect_status (advisory)</dt>
-        <dd>
-          <code>{search.redirect_status ?? "—"}</code>
-        </dd>
-        <dt>order status (authoritative, via webhook)</dt>
+        <dt>order status (authoritative)</dt>
         <dd>
           {!orderId && <code>—</code>}
           {orderId && isLoading && <code>loading…</code>}

@@ -2,6 +2,9 @@ import {
   type CreatePaymentIntentRequest,
   type CreatePaymentIntentResponse,
   CreatePaymentIntentResponseSchema,
+  type CreateCheckoutSessionRequest,
+  type CreateCheckoutSessionResponse,
+  CreateCheckoutSessionResponseSchema,
   type GetOrderResponse,
   GetOrderResponseSchema,
 } from "@stripe-prototype/shared";
@@ -23,6 +26,23 @@ export async function createPaymentIntent(
     );
   }
   return CreatePaymentIntentResponseSchema.parse(json);
+}
+
+export async function createCheckoutSession(
+  body: CreateCheckoutSessionRequest,
+): Promise<CreateCheckoutSessionResponse> {
+  const res = await fetch(`${BASE}/api/checkout/session`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const json = (await res.json()) as unknown;
+  if (!res.ok) {
+    throw new Error(
+      `api ${res.status}: ${JSON.stringify((json as { error?: unknown }).error ?? json)}`,
+    );
+  }
+  return CreateCheckoutSessionResponseSchema.parse(json);
 }
 
 // Returns null on 404 (order not found — can happen if the success page
