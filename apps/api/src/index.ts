@@ -5,6 +5,7 @@ import { loadEnv } from "./env";
 import { makeStripe, STRIPE_API_VERSION } from "./stripe";
 import { openDb } from "./db";
 import { paymentsRoutes } from "./routes/payments";
+import { checkoutRoutes } from "./routes/checkout";
 import { webhookRoutes } from "./routes/webhooks";
 
 const env = loadEnv();
@@ -21,12 +22,16 @@ const webhooksEnabled = !!env.STRIPE_WEBHOOK_SECRET;
 // relative to CWD so we don't leak /Users/<name>/... into transcripts.
 // Closes stage-1/#9 ("Log sanitized startup config + document env precedence").
 console.log(
-  `[api] stage=3 mode=test port=${env.API_PORT} db=${relative(process.cwd(), db.file)} api_version=${STRIPE_API_VERSION} webhooks=${webhooksEnabled ? "on" : "off"}`,
+  `[api] stage=4 mode=test port=${env.API_PORT} db=${relative(process.cwd(), db.file)} api_version=${STRIPE_API_VERSION} webhooks=${webhooksEnabled ? "on" : "off"} app_base_url=${env.APP_BASE_URL}`,
 );
 
 const app = new Hono();
 
 app.route("/api/payments", paymentsRoutes({ stripe, db }));
+app.route(
+  "/api/checkout",
+  checkoutRoutes({ stripe, db, appBaseUrl: env.APP_BASE_URL }),
+);
 if (env.STRIPE_WEBHOOK_SECRET) {
   app.route(
     "/api/webhooks",
@@ -35,7 +40,7 @@ if (env.STRIPE_WEBHOOK_SECRET) {
 }
 
 app.get("/", (c) =>
-  c.json({ ok: true, stage: 3, api_version: STRIPE_API_VERSION }),
+  c.json({ ok: true, stage: 4, api_version: STRIPE_API_VERSION }),
 );
 
 app.get("/health", async (c) => {

@@ -17,6 +17,10 @@ const EnvSchema = z.object({
     .optional(),
   API_PORT: z.coerce.number().int().positive().default(8787),
   DATABASE_URL: z.string().default("apps/api/.data/stripe-prototype.db"),
+  // Stage 4 hosted Checkout needs an absolute success_url / cancel_url.
+  // Defaults to the Vite dev origin; override via .env for tunneled or
+  // alternative dev setups.
+  APP_BASE_URL: z.string().url().default("http://127.0.0.1:5173"),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

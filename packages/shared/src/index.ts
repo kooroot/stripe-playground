@@ -108,3 +108,33 @@ export const GetOrderResponseSchema = z.object({
   updatedAt: z.number().int(),
 });
 export type GetOrderResponse = z.infer<typeof GetOrderResponseSchema>;
+
+// ---------- Stage 4: hosted Checkout Session contract ----------
+
+// Ad-hoc line_items via price_data: the hosted flow doesn't need a pre-seeded
+// Price object to be usable, which keeps the prototype self-contained (Stage 1
+// seed optional). Product display name + amount are passed per request.
+export const CreateCheckoutSessionRequestSchema = z.object({
+  orderId: OrderIdSchema,
+  amount: z.number().int().min(50),
+  currency: IsoCurrencySchema,
+  productName: z.string().min(1).max(250),
+});
+export type CreateCheckoutSessionRequest = z.infer<
+  typeof CreateCheckoutSessionRequestSchema
+>;
+
+// `url` is Stripe's hosted checkout URL (checkout.stripe.com/...). The web
+// app redirects via `window.location.href = url`. `sessionId` is surfaced
+// for observability; the route also persists the order pre-redirect so the
+// success page poll picks it up the same way the Elements flow does.
+export const CreateCheckoutSessionResponseSchema = z.object({
+  url: z.string(),
+  sessionId: z.string(),
+  paymentIntentId: z.string().nullable(),
+  orderId: z.string(),
+  status: z.enum(["new", "reused"]),
+});
+export type CreateCheckoutSessionResponse = z.infer<
+  typeof CreateCheckoutSessionResponseSchema
+>;

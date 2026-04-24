@@ -17,7 +17,9 @@ type HandledEvent =
   | "payment_intent.processing"
   | "payment_intent.requires_action"
   | "payment_intent.canceled"
-  | "charge.refunded";
+  | "charge.refunded"
+  | "checkout.session.completed"
+  | "checkout.session.expired";
 
 const HANDLED_EVENTS: ReadonlySet<string> = new Set<HandledEvent>([
   "payment_intent.succeeded",
@@ -26,6 +28,11 @@ const HANDLED_EVENTS: ReadonlySet<string> = new Set<HandledEvent>([
   "payment_intent.requires_action",
   "payment_intent.canceled",
   "charge.refunded",
+  // Stage 4: hosted-Checkout-specific events. They race with the underlying
+  // payment_intent.* events, but the idempotency gate makes "first wins"
+  // — both paths converge on the same terminal status for a given order.
+  "checkout.session.completed",
+  "checkout.session.expired",
 ]);
 
 export function webhookRoutes(deps: {
@@ -151,6 +158,41 @@ async function dispatch(event: Stripe.Event, db: Db): Promise<void> {
       const order = db.getOrderByIntent(pi);
       if (!order) return;
       db.updateOrderStatus(order.order_id, "refunded");
+      return;
+    }
+    case "checkout.session.completed": {
+      // Fires when the hosted session hits `status: "complete"`. For
+      // mode: "payment" that's `payment_status: "paid"` for synchronous PMs,
+      // or `unpaid` + a still-processing PI for async PMs (stablecoin,
+      // bank debits, etc.). Only flip to "succeeded" when the session says
+      // paid; otherwise defer to the payment_intent.* events.
+      const session = event.data.object as Stripe.Checkout.Session;
+      const orderId =
+        session.metadata?.order_id ?? session.client_reference_id ?? null;
+      if (!orderId) return;
+      if (session.payment_status === "paid") {
+        db.updateOrderStatus(orderId, "succeeded");
+      }
+      return;
+    }
+    case "checkout.session.expired": {
+      // 24h default expiry with no completed payment. Terminal for the
+      // session, but we don't auto-flip to "canceled" here: if the user is
+      // in a 3DS challenge or the PI is processing, the payment_intent
+      // events are authoritative. Only mark canceled when the order is
+      // still in an initial "awaiting input" state.
+      const session = event.data.object as Stripe.Checkout.Session;
+      const orderId =
+        session.metadata?.order_id ?? session.client_reference_id ?? null;
+      if (!orderId) return;
+      const order = db.getOrder(orderId);
+      if (!order) return;
+      if (
+        order.status === "requires_payment_method" ||
+        order.status === "requires_confirmation"
+      ) {
+        db.updateOrderStatus(orderId, "canceled");
+      }
       return;
     }
     default:
