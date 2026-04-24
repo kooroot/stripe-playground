@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation } from "@tanstack/react-query";
 import {
@@ -123,5 +123,3 @@ function PaymentForm() {
   );
 }
 
-// Suppress unused import false-positive when @ts-nocheck regenerates.
-export type _UseEffect = typeof useEffect;
