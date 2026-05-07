@@ -6,9 +6,13 @@ Full design and stage plan: [docs/plans/2026-04-24-stripe-prototype-track-a-desi
 
 ## Status
 
+Stage 5 — Full refund flow + stablecoin/Tempo deep-dive. `POST /api/payments/refund` issues a full refund via `stripe.refunds.create` with an order-derived idempotency key, gated on `orders.status == "succeeded"` and pre-checked against `refunds.list` to avoid double-issuing. Both `/checkout/success` and `/checkout-hosted/success` expose a Refund button and reflect the `refunded` state once `charge.refunded` lands. Stablecoin acceptance / Tempo / main-app integration notes live under [`docs/notes/`](./docs/notes/).
+
+Stage 4 — Hosted Checkout vs Elements. `POST /api/checkout/session` creates a Stripe-hosted Checkout Session and `/checkout-hosted` redirects users to it; `/checkout-hosted/success` and `/checkout-hosted/cancel` close the loop via the shared `useOrderPoll` hook. `checkout.session.{completed,async_payment_succeeded,async_payment_failed,expired}` are dispatched from the same webhook handler, so order state stays webhook-authoritative across both flows. Comparison memo: [`docs/notes/stage-4-elements-vs-checkout.md`](./docs/notes/stage-4-elements-vs-checkout.md).
+
 Stage 3 — Webhook signature verify + idempotency. `POST /api/webhooks/stripe` verifies the Stripe-Signature header against the raw request body, gates on a `processed_events` table keyed by `event.id`, and drives `orders.status` transitions from `payment_intent.{succeeded,processing,payment_failed,canceled}` and `charge.refunded`. `/checkout/success` polls `GET /api/payments/order/:orderId` until the status is terminal, so the page reflects webhook truth rather than the Stripe redirect param.
 
-Stage 2 remains: `POST /api/payments/intent` is the order-keyed create-or-reuse endpoint backed by `bun:sqlite` (`apps/api/.data/`). The web app at `/checkout` uses TanStack Query to create the intent and renders a Stripe `PaymentElement` with dynamic payment methods (cards + crypto + whatever the dashboard allows).
+Stage 2 — Elements + order-keyed PaymentIntent. `POST /api/payments/intent` is the order-keyed create-or-reuse endpoint backed by `bun:sqlite` (`apps/api/.data/`). The web app at `/checkout` uses TanStack Query to create the intent and renders a Stripe `PaymentElement` with dynamic payment methods (cards + crypto + whatever the dashboard allows).
 
 ## Stack
 
@@ -34,14 +38,17 @@ bun run dev
 # and restart the script; the api logs `webhooks=on` once the secret is picked up.
 bun run dev:webhooks
 
-# open http://127.0.0.1:5173/checkout
+# Elements flow (Stage 2/3): http://127.0.0.1:5173/checkout
 #   - generates a UUID orderId client-side
 #   - POST /api/payments/intent creates a PaymentIntent (dynamic PMs)
 #   - PaymentElement renders every dashboard-enabled method
 #   - submit with test card 4242… for happy path
 #     or 4000 00 25 0000 3155 for 3DS challenge
-# after redirect: /checkout/success polls GET /api/payments/order/:orderId
-# until the webhook flips status to `succeeded` / `failed` / `refunded`.
+# Hosted Checkout flow (Stage 4): http://127.0.0.1:5173/checkout-hosted
+#   - POST /api/checkout/session, redirect to Stripe-hosted page
+# Both success pages poll GET /api/payments/order/:orderId until the
+# webhook flips status to `succeeded` / `failed` / `refunded`, and expose a
+# Refund button (Stage 5) that calls POST /api/payments/refund.
 
 # Stage 3 webhook smoke test (in another shell, with dev:webhooks running):
 #   stripe trigger payment_intent.succeeded
